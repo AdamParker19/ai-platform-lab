@@ -1,0 +1,36 @@
+name: AWS authentication check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  authenticate:
+    name: Verify publisher role
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - name: Request temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::501683248889:role/ai-platform-lab-github-publisher
+          role-session-name: github-auth-${{ github.run_id }}
+          role-duration-seconds: 900
+          allowed-account-ids: "501683248889"
+          retry-max-attempts: 3
+          unset-current-credentials: true
+      - name: Verify AWS identity
+        shell: bash
+        run: |
+          aws sts get-caller-identity
+          publisher_identity=$(aws sts get-caller-identity --query Arn --output text)
+          if [[ "$publisher_identity" != arn:aws:sts::501683248889:assumed-role/ai-platform-lab-github-publisher/* ]]; then
+            echo "Unexpected AWS role identity"
+            exit 1
+          fi
+          echo "GitHub successfully assumed the project publisher role."
