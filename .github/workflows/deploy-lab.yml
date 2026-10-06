@@ -1,0 +1,51 @@
+name: Deploy lab for 15 minutes
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Exact tag shared by both images in the Publish images summary"
+        required: true
+        type: string
+        default: sha-f8042ce37658f2d68fdd8dc4a2cb63577c7adb6d-run-37333995410-1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ai-platform-lab
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy one task with scheduled shutdown
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test deployment safeguards without AWS access
+        run: python -m unittest discover -s scripts -p 'test_deploy_lab.py' -v
+      - name: Request temporary deployment credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::501683248889:role/ai-platform-lab-github-deployer
+          role-session-name: github-deploy-${{ github.run_id }}
+          role-duration-seconds: 900
+          allowed-account-ids: "501683248889"
+          retry-max-attempts: 3
+          unset-current-credentials: true
+      - name: Verify images, schedule shutdown, and deploy
+        run: python scripts/deploy_lab.py
