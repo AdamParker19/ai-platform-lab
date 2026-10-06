@@ -1,0 +1,51 @@
+name: Roll back stopped lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_revision:
+        description: "Earlier ACTIVE task-definition revision number (for example 2)"
+        required: true
+        type: string
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ai-platform-lab
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Restore configuration with zero tasks
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_REVISION: ${{ inputs.target_revision }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test deployment and rollback safeguards
+        run: python -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Request temporary deployment credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::501683248889:role/ai-platform-lab-github-deployer
+          role-session-name: github-rollback-${{ github.run_id }}
+          role-duration-seconds: 900
+          allowed-account-ids: "501683248889"
+          retry-max-attempts: 3
+          unset-current-credentials: true
+      - name: Restore and verify stopped service
+        run: python scripts/rollback_stopped_lab.py
