@@ -5,6 +5,7 @@ export interface ExtractionProvider {
 export type OllamaProviderOptions = {
   baseUrl?: string;
   model?: string;
+  think?: boolean;
 };
 
 export const EXTRACTION_SYSTEM_PROMPT = `You are a secure data extraction engine.
@@ -28,10 +29,12 @@ SECURITY & ACCURACY RULES:
 export class OllamaExtractionProvider implements ExtractionProvider {
   readonly baseUrl: string;
   readonly model: string;
+  readonly think: boolean;
 
   constructor(options: OllamaProviderOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/+$/, "");
     this.model = options.model ?? process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
+    this.think = options.think ?? (process.env.OLLAMA_THINK === "false" ? false : true);
   }
 
   async extract(document: string, options?: { signal?: AbortSignal }): Promise<unknown> {
@@ -48,6 +51,7 @@ export class OllamaExtractionProvider implements ExtractionProvider {
         ],
         stream: false,
         format: "json",
+        think: this.think,
       }),
       signal: options?.signal,
     });

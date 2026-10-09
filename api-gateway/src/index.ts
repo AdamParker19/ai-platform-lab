@@ -14,9 +14,11 @@ if (!["http:", "https:"].includes(new URL(inferenceUrl).protocol)) throw new Err
 
 const ollamaBaseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
 const ollamaModel = process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
+const ollamaThink = process.env.OLLAMA_THINK === "false" ? false : true;
 const extractionProvider = new OllamaExtractionProvider({
   baseUrl: ollamaBaseUrl,
   model: ollamaModel,
+  think: ollamaThink,
 });
 
 const server = createApp({
@@ -25,7 +27,7 @@ const server = createApp({
   extractionProvider,
   llmTimeoutMs,
 }).listen(port, "0.0.0.0", () => {
-  console.log(JSON.stringify({ service: "api-gateway", event: "listening", port, ollamaModel }));
+  console.log(JSON.stringify({ service: "api-gateway", event: "listening", port, ollamaModel, ollamaThink }));
 });
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
