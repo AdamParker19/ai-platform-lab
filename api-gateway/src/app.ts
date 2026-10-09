@@ -2,7 +2,16 @@ import express, { type ErrorRequestHandler } from "express";
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
-type Config = { inferenceUrl: string; timeoutMs: number };
+import { Extractor, ExtractionValidationError } from "./extraction/extractor.js";
+import { OllamaExtractionProvider, type ExtractionProvider } from "./extraction/provider.js";
+
+export type GatewayConfig = {
+  inferenceUrl: string;
+  timeoutMs: number;
+  extractionProvider?: ExtractionProvider;
+  llmTimeoutMs?: number;
+  maxDocumentLength?: number;
+};
 
 function validPrediction(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -13,8 +22,13 @@ function validPrediction(value: unknown): boolean {
     typeof v.modelVersion === "string" && v.modelVersion.length > 0;
 }
 
-export function createApp(config: Config) {
+export function createApp(config: GatewayConfig) {
   const app = express();
+  const llmTimeoutMs = config.llmTimeoutMs ?? 30000;
+  const maxDocLength = config.maxDocumentLength ?? 10000;
+  const extractionProvider = config.extractionProvider ?? new OllamaExtractionProvider();
+  const extractor = new Extractor(extractionProvider);
+
   app.disable("x-powered-by");
   app.use((req, res, next) => {
     const requestId = randomBytes(16).toString("hex");
@@ -58,6 +72,51 @@ export function createApp(config: Config) {
       res.status(signal.aborted ? 504 : 502).json({
         error: signal.aborted ? "Inference timed out" : "Inference service unavailable",
       });
+    }
+  });
+  app.post("/api/extract", async (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      res.status(400).json({ error: "Request body must be a JSON object" });
+      return;
+    }
+    if (!("document" in body)) {
+      res.status(400).json({ error: "document field is required" });
+      return;
+    }
+    if (typeof body.document !== "string") {
+      res.status(400).json({ error: "document must be a string" });
+      return;
+    }
+    const trimmedDocument = body.document.trim();
+    if (trimmedDocument.length === 0) {
+      res.status(400).json({ error: "document must not be empty" });
+      return;
+    }
+    if (trimmedDocument.length > maxDocLength) {
+      res.status(400).json({ error: `document exceeds maximum allowed length of ${maxDocLength} characters` });
+      return;
+    }
+    if (Object.keys(body).some(key => key !== "document")) {
+      res.status(400).json({ error: "No extra fields allowed in request body" });
+      return;
+    }
+
+    const signal = AbortSignal.timeout(llmTimeoutMs);
+    try {
+      const extraction = await extractor.extract(trimmedDocument, { signal });
+      res.json(extraction);
+    } catch (error: unknown) {
+      const isAborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
+      if (isAborted) {
+        res.status(504).json({ error: "LLM extraction timed out" });
+        return;
+      }
+      if (error instanceof ExtractionValidationError) {
+        res.status(502).json({ error: "Invalid model response" });
+        return;
+      }
+      res.status(502).json({ error: "Extraction service unavailable" });
     }
   });
   const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
