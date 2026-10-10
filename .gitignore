@@ -11,3 +11,9 @@ __pycache__/
 
 # Local synthetic extraction evaluation reports
 api-gateway/evaluation-results/
+
+# Local job documents, SQLite database and journals
+api-gateway/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

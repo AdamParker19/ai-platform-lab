@@ -5,7 +5,10 @@ import { performance } from "node:perf_hooks";
 import { Extractor, ExtractionValidationError } from "./extraction/extractor.js";
 import { OllamaExtractionProvider, type ExtractionProvider } from "./extraction/provider.js";
 
+import { JobStore, JobConflict, JobCapacity } from "./jobs/store.js";
+
 export type GatewayConfig = {
+  jobStore?: JobStore;
   inferenceUrl: string;
   timeoutMs: number;
   extractionProvider?: ExtractionProvider;
@@ -74,6 +77,34 @@ export function createApp(config: GatewayConfig) {
       });
     }
   });
+  app.post("/api/extraction-jobs", (req, res) => {
+    if (!config.jobStore) { res.status(503).json({ error: "Background jobs disabled" }); return; }
+    const key = req.get("Idempotency-Key");
+    const body = req.body;
+    if (!key || !/^[A-Za-z0-9_-]{8,128}$/.test(key)) {
+      res.status(400).json({ error: "Idempotency-Key must contain 8–128 letters, digits, underscores or hyphens" }); return;
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.document !== "string" ||
+        !body.document.trim() || body.document.trim().length > maxDocLength || Object.keys(body).some(k => k !== "document")) {
+      res.status(400).json({ error: `document must contain 1–${maxDocLength} characters; no extra fields allowed` }); return;
+    }
+    try {
+      const { job, replayed } = config.jobStore.enqueue(key, body.document.trim(), res.locals.requestId);
+      res.setHeader("Location", `/api/extraction-jobs/${job.jobId}`);
+      res.setHeader("Idempotency-Replayed", String(replayed));
+      res.status(replayed ? 200 : 202).json(job);
+    } catch (error) {
+      if (error instanceof JobConflict) { res.status(409).json({ error: error.message }); return; }
+      if (error instanceof JobCapacity) { res.status(503).json({ error: error.message }); return; }
+      throw error;
+    }
+  });
+  app.get("/api/extraction-jobs/:id", (req, res) => {
+    if (!config.jobStore) { res.status(503).json({ error: "Background jobs disabled" }); return; }
+    const job = config.jobStore.get(req.params.id);
+    if (!job) { res.status(404).json({ error: "Job not found" }); return; }
+    res.json(job);
+  });
   app.post("/api/extract", async (req, res) => {
     const body = req.body;
     if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -126,3 +157,4 @@ export function createApp(config: GatewayConfig) {
   app.use(errorHandler);
   return app;
 }
+

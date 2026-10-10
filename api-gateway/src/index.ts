@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { resolve } from "node:path";
+import { JobStore } from "./jobs/store.js";
 import { createApp } from "./app.js";
 import { OllamaExtractionProvider } from "./extraction/provider.js";
 
@@ -23,7 +25,11 @@ const extractionProvider = new OllamaExtractionProvider({
   think: ollamaThink,
 });
 
+const jobStore = process.env.JOBS_ENABLED === "true"
+  ? new JobStore(resolve(process.env.JOB_DB_PATH ?? "data/extraction-jobs.sqlite")) : undefined;
+
 const server = createApp({
+  jobStore,
   inferenceUrl,
   timeoutMs,
   extractionProvider,
@@ -33,7 +39,7 @@ const server = createApp({
 });
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
-    server.close(() => process.exit(0));
+    server.close(() => { jobStore?.close(); process.exit(0); });
     setTimeout(() => process.exit(1), 10000).unref();
   });
 }

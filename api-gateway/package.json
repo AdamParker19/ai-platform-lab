@@ -11,7 +11,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --import tsx --test tests/*.test.ts",
-    "verify:live": "node --import tsx scripts/verify-live.ts"
+    "verify:live": "node --import tsx scripts/verify-live.ts",
+    "worker:dev": "node --import tsx src/jobs/worker-main.ts",
+    "worker": "node dist/jobs/worker-main.js"
   },
   "dependencies": {
     "dotenv": "^18.0.7",
