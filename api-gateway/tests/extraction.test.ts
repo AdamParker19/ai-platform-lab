@@ -283,3 +283,72 @@ test("synthetic documents contract testing", async (t) => {
     await close(gateway);
   }
 });
+
+test("OllamaExtractionProvider think configuration and toggling", async (t) => {
+  const originalEnvThink = process.env.OLLAMA_THINK;
+
+  await t.test("defaults think to true when OLLAMA_THINK is unset and options.think is not provided", () => {
+    delete process.env.OLLAMA_THINK;
+    const provider = new OllamaExtractionProvider();
+    assert.equal(provider.think, true);
+  });
+
+  await t.test("picks up OLLAMA_THINK='false' from env", () => {
+    process.env.OLLAMA_THINK = "false";
+    const provider = new OllamaExtractionProvider();
+    assert.equal(provider.think, false);
+  });
+
+  await t.test("picks up OLLAMA_THINK='true' from env", () => {
+    process.env.OLLAMA_THINK = "true";
+    const provider = new OllamaExtractionProvider();
+    assert.equal(provider.think, true);
+  });
+
+  await t.test("picks up OLLAMA_THINK='\"false\"' with quotes from .env", () => {
+    process.env.OLLAMA_THINK = '"false"';
+    const provider = new OllamaExtractionProvider();
+    assert.equal(provider.think, false);
+  });
+
+  await t.test("options.think overrides process.env.OLLAMA_THINK", () => {
+    process.env.OLLAMA_THINK = "false";
+    const providerTrue = new OllamaExtractionProvider({ think: true });
+    assert.equal(providerTrue.think, true);
+
+    process.env.OLLAMA_THINK = "true";
+    const providerFalse = new OllamaExtractionProvider({ think: false });
+    assert.equal(providerFalse.think, false);
+  });
+
+  await t.test("extract() sends think boolean in Ollama request body", async () => {
+    let capturedBody: any = null;
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) {
+          capturedBody = JSON.parse(init.body as string);
+        }
+        return new Response(JSON.stringify({
+          message: { content: JSON.stringify({ supplierName: "Test", productName: null, countryOfOrigin: null, material: null, certificates: [] }) }
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+
+      const providerOff = new OllamaExtractionProvider({ think: false });
+      await providerOff.extract("test doc");
+      assert.equal(capturedBody?.think, false);
+
+      const providerOn = new OllamaExtractionProvider({ think: true });
+      await providerOn.extract("test doc");
+      assert.equal(capturedBody?.think, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalEnvThink !== undefined) {
+        process.env.OLLAMA_THINK = originalEnvThink;
+      } else {
+        delete process.env.OLLAMA_THINK;
+      }
+    }
+  });
+});
+

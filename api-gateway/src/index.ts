@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createApp } from "./app.js";
 import { OllamaExtractionProvider } from "./extraction/provider.js";
 
@@ -14,7 +15,8 @@ if (!["http:", "https:"].includes(new URL(inferenceUrl).protocol)) throw new Err
 
 const ollamaBaseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
 const ollamaModel = process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
-const ollamaThink = process.env.OLLAMA_THINK === "false" ? false : true;
+const thinkEnv = process.env.OLLAMA_THINK?.replace(/^["']|["']$/g, "").trim();
+const ollamaThink = thinkEnv === "false" ? false : true;
 const extractionProvider = new OllamaExtractionProvider({
   baseUrl: ollamaBaseUrl,
   model: ollamaModel,

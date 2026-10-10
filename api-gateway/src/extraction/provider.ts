@@ -34,7 +34,8 @@ export class OllamaExtractionProvider implements ExtractionProvider {
   constructor(options: OllamaProviderOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/+$/, "");
     this.model = options.model ?? process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
-    this.think = options.think ?? (process.env.OLLAMA_THINK === "false" ? false : true);
+    const thinkEnv = process.env.OLLAMA_THINK?.replace(/^["']|["']$/g, "").trim();
+    this.think = options.think ?? (thinkEnv === "false" ? false : true);
   }
 
   async extract(document: string, options?: { signal?: AbortSignal }): Promise<unknown> {

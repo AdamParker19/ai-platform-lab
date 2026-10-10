@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createApp } from "../src/app.js";
 import { OllamaExtractionProvider, EXTRACTION_SYSTEM_PROMPT } from "../src/extraction/provider.js";
 import { extractionSchema, type ExtractionResult } from "../src/extraction/schema.js";

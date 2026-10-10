@@ -7,19 +7,21 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "node --import tsx --watch src/index.ts",
+    "dev": "nodemon",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "node --import tsx --test tests/*.test.ts",
     "verify:live": "node --import tsx scripts/verify-live.ts"
   },
   "dependencies": {
+    "dotenv": "^18.0.7",
     "express": "^5.1.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
+    "nodemon": "^3.1.14",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
