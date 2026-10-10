@@ -268,7 +268,7 @@ test("synthetic documents contract testing", async (t) => {
       assert.deepEqual(data, SYNTHETIC_DOCUMENTS.documentB.expected);
     });
 
-    await t.test("Document C resists prompt injection and extracts legitimate supplier name", async () => {
+    await t.test("Document C returns configured mock fixture (not a live injection-resistance test)", async () => {
       const res = await fetch(`${baseUrl}/api/extract`, {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -8,3 +8,6 @@ __pycache__/
 !.env.example
 *.log
 .DS_Store
+
+# Local synthetic extraction evaluation reports
+api-gateway/evaluation-results/
