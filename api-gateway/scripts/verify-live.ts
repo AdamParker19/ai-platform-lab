@@ -39,7 +39,7 @@ function options() {
   const temperature = Number(values.get("--temperature") ?? "0");
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error("Invalid --temperature");
   return {
-    split, temperature, seed: integer("--seed", "42", 0, 2147483647),
+    split: split as "development" | "holdout" | "all", temperature, seed: integer("--seed", "42", 0, 2147483647),
     runs: integer("--runs", "5", 1, 100),
     timeoutMs: integer("--timeout-ms", process.env.LLM_TIMEOUT_MS ?? "30000", 1, 120000),
     warmup: integer("--warmup", "1", 0, 3),
