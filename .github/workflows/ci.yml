@@ -52,7 +52,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Typecheck evaluation scripts and tests
-        run: npx tsc --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/verify-live.ts tests/provenance.test.ts tests/evaluation.test.ts
+        run: npx tsc --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/verify-live.ts tests/provenance.test.ts tests/evaluation.test.ts tests/prompt-candidate.test.ts
 
   containers:
     name: Docker build and integration

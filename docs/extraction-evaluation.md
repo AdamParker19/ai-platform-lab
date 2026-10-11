@@ -24,7 +24,7 @@ npm run verify:live -- --split holdout --runs 5 --output evaluation-results/hold
 
 Native runs use http://127.0.0.1:11434 by default; OLLAMA_BASE_URL overrides this. The script loads .env. It creates temporary local gateways and calls the real extraction route, independently of the running Compose gateway/worker. Pause other model traffic while benchmarking. This is not a queue throughput benchmark.
 
-Other flags: --thinking both|on|off, --timeout-ms 1..120000, --warmup 0..3, --seed 0..2147483647, --temperature 0..2, --split development|holdout|all. Defaults are both modes, five repetitions, one warmup per mode, 30 seconds (or LLM_TIMEOUT_MS), seed 42, temperature 0, development split. Explicit evaluation settings do not change the background worker's generation settings. Worker metadata uses null for generation options left to Ollama defaults.
+Other flags: --prompt baseline-v1|evidence-v2, --baseline-report path/to/report.json, --thinking both|on|off, --timeout-ms 1..120000, --warmup 0..3, --seed 0..2147483647, --temperature 0..2, --split development|holdout|all. Defaults are both modes, five repetitions, one warmup per mode, 30 seconds (or LLM_TIMEOUT_MS), seed 42, temperature 0, development split. Explicit evaluation settings do not change the background worker's generation settings. Worker metadata uses null for generation options left to Ollama defaults.
 
 There are five development examples and four candidate holdout examples. A default run can take roughly 28 minutes at the deadline; start with the quick check. Output files are ignored by git. JSON and .md reports share a basename.
 
@@ -86,3 +86,36 @@ Automated tests use fake HTTP providers and real temporary SQLite files. They te
 6. src/jobs/store.ts and worker.ts persist per-attempt history.
 
 Model output passing a schema remains separate from factual accuracy.
+
+## One controlled prompt candidate
+
+The default system prompt is preserved byte-for-byte as baseline-v1. evidence-v2 is an experimental system prompt with general evidence rules, no named fixture example, explicit treatment of document instructions as untrusted content, and an ambiguity rule. The document wrapper, JSON format, model, sampling settings and scoring are unchanged. A clearer prompt can still fail; it is not an injection security boundary.
+
+To compare against your completed five-run baseline, run from api-gateway:
+
+```powershell
+$env:OLLAMA_MODEL = 'Qwen3:1.7b'
+npm run verify:live -- --prompt evidence-v2 --runs 5 --warmup 1 --timeout-ms 30000 --seed 42 --temperature 0 --baseline-report evaluation-results/baseline-v1.json --output evaluation-results/candidate-evidence-v2.json
+```
+
+Use the actual filename of your saved full baseline JSON if it differs. The earlier one-run quick.json is not a compatible five-run reference. A terminal summary alone cannot supply the fixtures, per-request outcomes and observed digests needed for a traceable comparison. The original report is read, never intentionally overwritten.
+
+--baseline-report requires evidence-v2. The script validates the baseline before model calls and stops early if its dataset, selected fixtures, requested model or configuration differ. Old reportVersion 2 baselines are supported by checking their actual prompt hash. An unknown --prompt is rejected; it cannot silently fall back.
+
+After execution, observed weight digests must also match. Unavailable or changed identity produces INCOMPARABLE, not a claimed improvement. JSON and Markdown include both accuracy values, percentage-point changes, timeout-count changes and median-latency ratios. Scores are recalculated from validated individual measurements, rather than copied from cached report summaries.
+
+A change from 40% to 52% is +12 percentage points. A median ratio of 0.5 means half the previous median latency; 2 means twice as long. Negative timeout change is better. The strict all-correct gate remains separate from improvement: improving a weak baseline can still yield FAIL.
+
+This is a historical comparison. Keep the same hardware/Ollama version and other model traffic idle; metadata checks cannot eliminate thermal load, caching, runtime changes or random variation. Five repeated runs are still only five unique development documents.
+
+Keep the holdout reserved until a candidate and settings are frozen. Changing prompts after inspecting holdout results turns those documents into development data. Do not keep rerunning until a lucky result passes.
+
+## Code walkthrough
+
+1. src/extraction/prompts.ts contains the frozen baseline, candidate and validated variant names.
+2. OllamaExtractionProvider selects the system message from an explicit constructor option. Its metadata hashes that same selected text. Gateway and worker continue to default to baseline-v1; the candidate is selected by the evaluator.
+3. scripts/verify-live.ts records the selected variant and executes the existing HTTP route with the existing dataset.
+4. scripts/comparison.ts validates measurements and checks experiment compatibility before deriving changes.
+5. scripts/report.ts renders the evidence; tests use fake Ollama HTTP responses to verify wiring, not to claim real-model accuracy.
+
+Prompt versioning plus evaluation is an experiment workflow. It does not silently deploy a candidate.

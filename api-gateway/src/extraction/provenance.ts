@@ -7,6 +7,7 @@ export type Provenance = {
   digestStatus: "unavailable" | "observed";
   observedAt: string | null;
   promptSha256: string | null;
+  promptVariant?: string;
   settings: { think: boolean | null; temperature: number | null; seed: number | null; format: string | null };
 };
 export const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");

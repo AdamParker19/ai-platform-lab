@@ -1,4 +1,5 @@
 import { fields } from "./evaluation.js";
+import type { compareReports } from "./comparison.js";
 
 type Summary = {
   thinking: boolean; attempts: number; wholeDocumentAccuracy: number | null;
@@ -7,6 +8,7 @@ type Summary = {
   perField: { [key: string]: number | null };
 };
 type Report = {
+  promptVariant?: string; comparison?: ReturnType<typeof compareReports>;
   model: string; passed: boolean; modelIdentityConsistent: boolean; promptSha256: string;
   codeRevision: string | null; dataset: { version: string; sha256: string; split: string };
   summary: Summary[]; scope: string;
@@ -17,6 +19,7 @@ export function markdownReport(report: Report) {
   const lines = [
     "# Extraction evaluation", "",
     "Model: " + safe(report.model),
+    "Prompt variant: " + (report.promptVariant ?? "baseline-v1 (legacy report)"),
     "Dataset: " + report.dataset.version + " (" + report.dataset.split + ")",
     "Dataset SHA-256: " + report.dataset.sha256,
     "Prompt SHA-256: " + report.promptSha256,
@@ -36,5 +39,25 @@ export function markdownReport(report: Report) {
     "Latency includes failed requests and timeouts. Warmups are excluded. JSON contains individual outcomes and split summaries.",
     "A failed gate is diagnostic evidence; do not change labels just to make it pass.", "",
   ];
+  if (report.comparison) {
+    const comparison = report.comparison;
+    lines.push("## Candidate versus baseline", "");
+    if (!comparison.comparable) {
+      lines.push("INCOMPARABLE: " + comparison.reasons.map(safe).join("; "), "");
+    } else {
+      lines.push(
+        "| Thinking | Baseline accuracy | Candidate accuracy | Change (pp) | Timeout change | Median latency ratio |",
+        "|---|---:|---:|---:|---:|---:|",
+        ...comparison.modes.map(m => "| " + [
+          m.thinking ? "on" : "off", percent(m.baseline.wholeDocumentAccuracy),
+          percent(m.candidate.wholeDocumentAccuracy),
+          m.wholeDocumentDeltaPercentagePoints.toFixed(1), m.timeoutDelta,
+          m.medianLatencyRatio === null ? "n/a" : m.medianLatencyRatio.toFixed(2) + "x",
+        ].join(" | ") + " |"),
+        "", "Positive accuracy change is better; negative timeout change is better. A latency ratio below 1 is faster.", ""
+      );
+    }
+    lines.push(comparison.limits, "");
+  }
   return lines.join("\n");
 }

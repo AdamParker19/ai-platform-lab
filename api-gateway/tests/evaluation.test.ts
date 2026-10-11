@@ -7,6 +7,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sameExtraction, summarize, hasFailures } from "../scripts/evaluation.js";
+import { EXTRACTION_SYSTEM_PROMPT, EVIDENCE_SYSTEM_PROMPT } from "../src/extraction/prompts.js";
 import { SYNTHETIC_DOCUMENTS } from "./synthetic.js";
 
 test("evaluation comparison ignores field/certificate order but catches wrong values and duplicates", () => {
@@ -23,6 +24,7 @@ for (const scenario of ["correct", "mixed"] as const) {
   test(`evaluation CLI records actual HTTP outcomes and exits correctly: ${scenario}`, { timeout: 15000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "extraction-evaluation-"));
     const seenModes = new Set<boolean>();
+    const seenPrompts = new Set<string>();
     const upstream = createServer(async (req, res) => {
       if (req.url === "/api/tags") {
         res.setHeader("content-type", "application/json");
@@ -33,6 +35,7 @@ for (const scenario of ["correct", "mixed"] as const) {
       for await (const chunk of req) input += chunk;
       const payload = JSON.parse(input);
       seenModes.add(payload.think);
+      seenPrompts.add(payload.messages[0].content);
       assert.equal(payload.options.temperature, 0);
       assert.equal(payload.options.seed, 42);
       const raw = payload.messages[1].content as string;
@@ -72,6 +75,7 @@ for (const scenario of ["correct", "mixed"] as const) {
       const report = JSON.parse(await readFile(outputPath, "utf8"));
       assert.deepEqual([...seenModes].sort(), [false, true]);
       assert.equal(report.results.length, 10);
+      assert.equal(report.promptVariant, "baseline-v1");
       assert.equal(report.modelIdentityConsistent, true);
       assert.equal(report.dataset.version, "supplier-extraction-v1");
       assert.match(report.dataset.sha256, /^[a-f0-9]{64}$/);
@@ -86,6 +90,26 @@ for (const scenario of ["correct", "mixed"] as const) {
       if (scenario === "correct") {
         assert.equal(report.summary[0].successRate, 1);
         assert.equal(report.summary[1].successRate, 1);
+        const candidatePath = join(directory, "candidate.json");
+        child = spawn(process.execPath, ["--import", "tsx", "scripts/verify-live.ts",
+          "--runs", "1", "--warmup", "0", "--timeout-ms", "300", "--prompt", "evidence-v2",
+          "--baseline-report", outputPath, "--output", candidatePath], {
+          cwd: process.cwd(),
+          env: { ...process.env, OLLAMA_BASE_URL: `http://127.0.0.1:${addr.port}`, OLLAMA_MODEL: "qwen3:1.7b" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let candidateOutput = "";
+        child.stdout!.on("data", chunk => candidateOutput += chunk);
+        child.stderr!.on("data", chunk => candidateOutput += chunk);
+        const [candidateCode] = await once(child, "exit");
+        assert.equal(candidateCode, 0, candidateOutput);
+        const candidateReport = JSON.parse(await readFile(candidatePath, "utf8"));
+        assert.equal(candidateReport.promptVariant, "evidence-v2");
+        assert.equal(candidateReport.comparison.comparable, true);
+        assert.equal(candidateReport.comparison.modes[0].wholeDocumentDeltaPercentagePoints, 0);
+        assert.deepEqual(seenPrompts, new Set([EXTRACTION_SYSTEM_PROMPT, EVIDENCE_SYSTEM_PROMPT]));
+        assert.ok((await readFile(candidatePath.replace(/\.json$/, ".md"), "utf8")).includes("Candidate versus baseline"));
+        assert.equal(await readFile(outputPath, "utf8"), JSON.stringify(report, null, 2) + "\n");
       } else {
         assert.equal(report.summary[0].incorrect, 2);
         assert.equal(report.summary[1].timeouts, 1);

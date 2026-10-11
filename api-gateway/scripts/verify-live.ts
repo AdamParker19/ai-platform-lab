@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { createApp } from "../src/app.js";
-import { OllamaExtractionProvider, EXTRACTION_SYSTEM_PROMPT } from "../src/extraction/provider.js";
-import { extractionSchema, type ExtractionResult } from "../src/extraction/schema.js";
+import { OllamaExtractionProvider } from "../src/extraction/provider.js";
+import { parsePromptVariant, systemPrompt } from "../src/extraction/prompts.js";
+import { compareReports, parseExperimentReport, baselinePlanProblems } from "./comparison.js";
+import { extractionSchema } from "../src/extraction/schema.js";
 import { loadDataset } from "./dataset.js";
 import { quality, fieldScores } from "./evaluation.js";
 import { markdownReport } from "./report.js";
@@ -9,14 +11,14 @@ import { execFileSync } from "node:child_process";
 import { sameExtraction, summarize, hasFailures, type EvaluationRow } from "./evaluation.js";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Server } from "node:http";
 
 
 function options() {
   const values = new Map<string, string>();
-  const allowed = ["--runs", "--timeout-ms", "--thinking", "--warmup", "--output", "--split", "--seed", "--temperature"];
+  const allowed = ["--runs", "--timeout-ms", "--thinking", "--warmup", "--output", "--split", "--seed", "--temperature", "--prompt", "--baseline-report"];
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i]!;
@@ -39,6 +41,8 @@ function options() {
   const temperature = Number(values.get("--temperature") ?? "0");
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error("Invalid --temperature");
   return {
+    promptVariant: parsePromptVariant(values.get("--prompt") ?? "baseline-v1"),
+    baselineReport: values.get("--baseline-report"),
     split: split as "development" | "holdout" | "all", temperature, seed: integer("--seed", "42", 0, 2147483647),
     runs: integer("--runs", "5", 1, 100),
     timeoutMs: integer("--timeout-ms", process.env.LLM_TIMEOUT_MS ?? "30000", 1, 120000),
@@ -86,6 +90,12 @@ async function attempt(url: string, doc: Awaited<ReturnType<typeof loadDataset>>
 
 async function main() {
   const config = options();
+  const baseline = config.baselineReport
+    ? parseExperimentReport(JSON.parse(await readFile(resolve(config.baselineReport), "utf8"))) : undefined;
+  if (baseline && config.promptVariant !== "evidence-v2") throw new Error("--baseline-report requires --prompt evidence-v2");
+  if (config.baselineReport && [config.output, config.output.replace(/\.json$/i, "") + ".md"].includes(resolve(config.baselineReport))) {
+    throw new Error("Output must not overwrite the baseline report");
+  }
   const dataset = await loadDataset(config.split);
   const documents = dataset.documents;
   let codeRevision: string | null = null;
@@ -98,13 +108,24 @@ async function main() {
   }
   const model = process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
   if (model.toLowerCase().includes("cloud")) throw new Error("Use a local model for this lab");
+  if (baseline) {
+    const problems = baselinePlanProblems(baseline, {
+      promptVariant: config.promptVariant,
+      promptSha256: createHash("sha256").update(systemPrompt(config.promptVariant)).digest("hex"),
+      model, dataset: { version: dataset.version, sha256: dataset.sha256, split: config.split },
+      configuration: { runs: config.runs, timeoutMs: config.timeoutMs, modes: config.modes, warmup: config.warmup, seed: config.seed, temperature: config.temperature },
+      fixtures: documents,
+    });
+    if (problems.length) throw new Error("Baseline cannot be compared: " + problems.join("; "));
+  }
   const startedAt = new Date().toISOString();
   const rows: EvaluationRow[] = [];
   const warmupRows: EvaluationRow[] = [];
   console.log(`Evaluating ${model}: ${documents.length} documents × ${config.runs} runs × ${config.modes.length} modes`);
+  console.log(`Prompt: ${config.promptVariant}`);
   console.log(`Deadline: ${config.timeoutMs}ms. Uses local Ollama; AWS is not contacted.`);
   for (const thinking of config.modes) {
-    const provider = new OllamaExtractionProvider({ baseUrl, model, think: thinking, temperature: config.temperature, seed: config.seed });
+    const provider = new OllamaExtractionProvider({ baseUrl, model, think: thinking, temperature: config.temperature, seed: config.seed, promptVariant: config.promptVariant });
     const before = await provider.describe();
     const server = createApp({ inferenceUrl: "http://127.0.0.1:9999", timeoutMs: 1000, extractionProvider: provider, llmTimeoutMs: config.timeoutMs }).listen(0, "127.0.0.1");
     try {
@@ -139,26 +160,36 @@ async function main() {
       return { split, thinking, ...summarize(selected), ...quality(selected) };
     }).filter(group => group.attempts > 0));
   const report = {
-    reportVersion: 2, startedAt, completedAt: new Date().toISOString(), model, codeRevision,
+    reportVersion: 3, promptVariant: config.promptVariant, startedAt, completedAt: new Date().toISOString(), model, codeRevision,
     dataset: { version: dataset.version, sha256: dataset.sha256, split: config.split, annotationPolicy: dataset.annotationPolicy },
     modelIdentityConsistent, observations, grouped,
-    promptSha256: createHash("sha256").update(EXTRACTION_SYSTEM_PROMPT).digest("hex"),
+    promptSha256: createHash("sha256").update(systemPrompt(config.promptVariant)).digest("hex"),
     configuration: { runs: config.runs, timeoutMs: config.timeoutMs, modes: config.modes, warmup: config.warmup, seed: config.seed, temperature: config.temperature },
-    scope: "Small synthetic dataset. Holdout is a candidate evaluation split, not independently blind data. Alpine appears in the prompt. Exact-match field scoring; failures count as zero. Digest snapshots detect observed tag changes but cannot prove weights used during every call. Fixed seed does not guarantee reproducibility across runtimes.",
+    scope: "Small synthetic dataset. Holdout is a candidate evaluation split, not independently blind data. The preserved baseline prompt includes the Alpine development example; evidence-v2 has no named fixture example. Exact-match field scoring; failures count as zero. Digest snapshots detect observed tag changes but cannot prove weights used during every call. Fixed seed does not guarantee reproducibility across runtimes.",
     passed: !hasFailures(rows) && modelIdentityConsistent, summary, warmupRows,
     fixtures: documents, results: rows.map(row => ({ ...row, fields: fieldScores(row) })),
   };
+  const comparison = baseline ? compareReports(baseline, report) : undefined;
+  const outputReport = { ...report, ...(comparison ? { comparison } : {}) };
   await mkdir(dirname(config.output), { recursive: true });
-  await writeFile(config.output, JSON.stringify(report, null, 2) + "\n", "utf8");
+  await writeFile(config.output, JSON.stringify(outputReport, null, 2) + "\n", "utf8");
   const markdownPath = config.output.replace(/\.json$/i, "") + ".md";
-  await writeFile(markdownPath, markdownReport(report), "utf8");
+  await writeFile(markdownPath, markdownReport(outputReport), "utf8");
   console.table(summary.map(({ perField, ...row }) => row));
+  if (comparison) {
+    if (comparison.comparable) console.table(comparison.modes.map(m => ({
+      thinking: m.thinking, accuracyDeltaPP: m.wholeDocumentDeltaPercentagePoints,
+      timeoutDelta: m.timeoutDelta, medianLatencyRatio: m.medianLatencyRatio,
+    })));
+    else console.error("INCOMPARABLE: " + comparison.reasons.join("; "));
+  }
   console.log(`Report saved: ${config.output}`);
   console.log(report.passed ? "PASS: all measured extractions correct" : "FAIL: extraction failure or unavailable/changed model identity; inspect report");
-  process.exitCode = report.passed ? 0 : 1;
+  process.exitCode = report.passed && (!comparison || comparison.comparable) ? 0 : 1;
 }
 
-main().catch(() => {
+main().catch((error: unknown) => {
+  if (error instanceof Error) console.error(error.message);
   console.error("Evaluation could not complete. Check CLI arguments, Ollama URL, and report destination. See scripts/verify-live.ts and docs/extraction-evaluation.md for usage.");
   process.exitCode = 1;
 });
