@@ -1,53 +1,88 @@
-# Local extraction evaluation
+# Traceable extraction evaluation
 
-Run from `api-gateway` with Ollama running and the chosen model already installed:
+This lab compares thinking off/on against versioned expected answers. It produces JSON evidence and a readable Markdown comparison. It uses your existing Ollama server; no AWS resource is created.
+
+## Run
+
+From api-gateway, with Node 24 and Ollama running:
 
 ```powershell
 npm ci
-npm run verify:live
-```
-
-The default evaluates five synthetic documents, five times each, with thinking off and on: 50 measured requests. It also performs one warm-up request per mode. Requests run sequentially, with a 30-second server deadline and a slightly longer client deadline. The worst-case request budget is roughly 28 minutes; actual duration depends on your hardware and model. It starts its own temporary gateway on a random localhost port, so you do not need to restart your normal gateway or change its thinking setting. It does not call AWS.
-
-For a short first run:
-
-```powershell
-npm run verify:live -- --runs 1
-```
-
-To change the configuration:
-
-```powershell
-$env:OLLAMA_MODEL = "qwen3:1.7b"
-$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-npm run verify:live -- --runs 5 --thinking both --timeout-ms 30000
-```
-
-Options:
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--runs` | 5 | Measured rounds per document and mode; 1–100 |
-| `--thinking` | both | `both`, `on`, or `off`; explicitly overrides `OLLAMA_THINK` for this evaluation |
-| `--timeout-ms` | `LLM_TIMEOUT_MS` or 30000 | Server deadline, 1–120000 ms |
-| `--warmup` | 1 | Warm-up requests per mode, 0–3 |
-| `--output` | Timestamped file in `evaluation-results/` | JSON report destination |
-
-Reports include configuration, model tag, prompt hash, expected and actual values, request IDs, status codes, per-request latency, outcome counts, success rate, median latency, and p95 latency. Latency summaries include unsuccessful attempts. Warm-ups are recorded separately and excluded from measured summaries and acceptance. Only synthetic fixtures are used; do not add confidential supplier documents to fixtures or published reports.
-
-The fixture set includes full information, missing information, the Alpine/HACKED regression, the Meridian/HACKED regression, and the Meridian administrator-override example. Every expected field is checked, not just the supplier name. Object-key ordering and certificate ordering are ignored; wrong values and duplicate certificates fail.
-
-Exit code is **0 only when every measured extraction is correct**. Incorrect output, timeout, invalid response, provider error, or an incomplete evaluation exits **1**. A FAIL can mean the runner successfully found the known model weakness; do not change expected answers just to make it pass.
-
-These are development/regression fixtures, not an independent final test or a security guarantee. The current system prompt includes the Alpine example. Model tags can refer to different artifacts over time, and this runner does not override seed or temperature. Thinking-off requests are evaluated before thinking-on requests; compare multiple evaluations before drawing performance conclusions.
-
-## Automated runner verification
-
-```powershell
-npm run build
 npm test
+npm run build
+$env:OLLAMA_MODEL = 'Qwen3:1.7b'
+
+# Quick check: five development documents, once in each mode.
+npm run verify:live -- --runs 1 --warmup 0 --output evaluation-results/quick.json
+
+# Main comparison: 50 measured requests, plus two warmups.
+npm run verify:live -- --runs 5 --output evaluation-results/comparison.json
+
+# Evaluate the reserved candidate split after freezing the prompt/settings.
+npm run verify:live -- --split holdout --runs 5 --output evaluation-results/holdout.json
 ```
 
-Runner integration tests launch a fake Ollama HTTP server, execute the CLI as a subprocess, inspect its saved report, and check its exit status. They verify correct answers, wrong answers, schema failures, upstream failures, and a hanging upstream request. They validate the evaluation machinery; they do not establish real-model quality or prompt-injection resistance.
+Native runs use http://127.0.0.1:11434 by default; OLLAMA_BASE_URL overrides this. The script loads .env. It creates temporary local gateways and calls the real extraction route, independently of the running Compose gateway/worker. Pause other model traffic while benchmarking. This is not a queue throughput benchmark.
 
-The existing synthetic endpoint tests use prewritten mock outputs and prove contract handling only. The live runner is the separate quality check.
+Other flags: --thinking both|on|off, --timeout-ms 1..120000, --warmup 0..3, --seed 0..2147483647, --temperature 0..2, --split development|holdout|all. Defaults are both modes, five repetitions, one warmup per mode, 30 seconds (or LLM_TIMEOUT_MS), seed 42, temperature 0, development split. Explicit evaluation settings do not change the background worker's generation settings. Worker metadata uses null for generation options left to Ollama defaults.
+
+There are five development examples and four candidate holdout examples. A default run can take roughly 28 minutes at the deadline; start with the quick check. Output files are ignored by git. JSON and .md reports share a basename.
+
+## What gets measured
+
+- Whole-document accuracy: every field must match.
+- Field accuracy: correct fields / (five fields × all measured attempts).
+- Per-field accuracy: supplierName, productName, countryOfOrigin, material and certificates.
+- Timeouts, provider errors and invalid responses: each remains in the denominator and gets zero correct fields.
+- Median/p95 latency: all measured requests, including failures. Warmups are stored separately and excluded from scores.
+
+Strings match exactly, including case. Scalar null is a legitimate expected value. Certificates are one field: order is ignored, duplicates count as a mismatch. One wrong supplier with the other four fields correct yields 80% field accuracy and 0% whole-document accuracy. Many missing fields can make field accuracy look generous, so examine complete-record accuracy and individual cases too.
+
+A conflicting origin with no confirmed resolution is annotated null in this dataset. That is our documented product rule, not a universal ML truth. If the model chooses one conflicting value, investigate the failure rather than silently changing the label. Changing rules/labels requires a dataset version change.
+
+## Reproduction metadata and its limits
+
+Each report includes dataset version and SHA-256, complete selected fixtures, prompt SHA-256, requested model, seed, temperature, thinking mode, deadline, code revision (when git is available), raw outputs and HTTP request IDs. Digest snapshots come from Ollama /api/tags before and after each mode. If a snapshot is unavailable or the observed digest changes across modes, modelIdentityConsistent is false and the gate fails.
+
+Snapshots are observations, not an atomic guarantee of which weights served every request. Avoid pulling/replacing models during a run. Cloud aliases have no verified local weight digest and are not suitable for this local lab. A fixed seed does not guarantee identical output across hardware or Ollama versions. Record your Ollama version/hardware alongside experiments when sharing results. The code revision may refer to a checkout with local edits; use a clean committed checkout.
+
+Modes currently run off then on; documents rotate between rounds. Warmups reduce cold-start bias, but fixed mode order, caching and background workloads still affect latency. Small-sample p95 is descriptive, not a production SLA.
+
+Exit 0 means every measured document matched and all model identity observations were consistent. Exit 1 indicates incorrect output, errors or uncertain identity; inspect the report. This intentionally strict regression gate is not a claim of production readiness.
+
+## Dataset discipline
+
+evaluation/dataset-v1.json holds versioned synthetic fixtures with categories ordinary, missing, ambiguous and injection. Existing Alpine/Meridian attacks remain development regressions. Alpine appears in the system prompt, so it cannot count as independent evidence.
+
+The holdout partition is a candidate reserved set created in this repository. It has not been independently curated or blinded. Do not tune the prompt using its results and continue calling it untouched: once used for tuning, move those examples into development in a new dataset version and collect fresh held-out examples. Synthetic success cannot establish general prompt-injection resistance.
+
+## Background job traceability
+
+GET /api/extraction-jobs/:id now includes attemptHistory. Each new claim atomically inserts an attempt containing initial provider configuration. A best-effort digest lookup updates that attempt before generation, within the existing total deadline. Model, system-prompt hash, thinking and explicit sampling settings are recorded per attempt. A lookup failure leaves digest null; it does not prevent serving.
+
+Completion or failure saves the attempt outcome and elapsed claim-to-completion duration in the same transaction as the job state. Retry attempts can show different configurations if a worker was reconfigured between attempts. A crashed attempt becomes worker_interrupted when lease recovery observes it; finishedAt is the recovery observation time and durationMs remains null because the exact death time is unknown.
+
+SQLite upgrades add a separate job_attempts table. Existing jobs remain intact. Historical completed jobs have empty attemptHistory because their provenance was never recorded. No values are invented retroactively. Stale attempts cannot overwrite newer provenance or results.
+
+After pulling, rebuild the local containers without deleting the volume:
+
+```powershell
+docker compose -f compose.yaml -f compose.jobs.yaml up --build -d
+```
+
+Submit a new job and poll it with ConvertTo-Json -Depth 10 to inspect nested provenance. Do not use down -v unless deliberately deleting all job history.
+
+## Verification
+
+Automated tests use fake HTTP providers and real temporary SQLite files. They test scoring, report output, sampling option forwarding, digest handling, additive schema upgrade, attempt history, restart recovery and stale-write rejection. They do not execute the real model. The feature branch now triggers the existing GitHub CI build/tests; check its run before using the commit.
+
+## Reading order
+
+1. scripts/dataset.ts validates and selects the fixture partition.
+2. scripts/verify-live.ts executes requests and captures experiment metadata.
+3. scripts/evaluation.ts computes exact-document and field scores.
+4. scripts/report.ts renders the comparison.
+5. src/extraction/provenance.ts defines metadata; provider.ts observes Ollama identity.
+6. src/jobs/store.ts and worker.ts persist per-attempt history.
+
+Model output passing a schema remains separate from factual accuracy.

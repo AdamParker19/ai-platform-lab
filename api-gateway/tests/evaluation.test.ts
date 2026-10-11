@@ -24,10 +24,17 @@ for (const scenario of ["correct", "mixed"] as const) {
     const directory = await mkdtemp(join(tmpdir(), "extraction-evaluation-"));
     const seenModes = new Set<boolean>();
     const upstream = createServer(async (req, res) => {
+      if (req.url === "/api/tags") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ models: [{ name: "qwen3:1.7b", digest: "a".repeat(64) }] }));
+        return;
+      }
       let input = "";
       for await (const chunk of req) input += chunk;
       const payload = JSON.parse(input);
       seenModes.add(payload.think);
+      assert.equal(payload.options.temperature, 0);
+      assert.equal(payload.options.seed, 42);
       const raw = payload.messages[1].content as string;
       let actual;
       if (raw.includes("Nordic Industrial")) actual = SYNTHETIC_DOCUMENTS.documentA.expected;
@@ -54,7 +61,7 @@ for (const scenario of ["correct", "mixed"] as const) {
       const outputPath = join(directory, "report.json");
       child = spawn(process.execPath, ["--import", "tsx", "scripts/verify-live.ts", "--runs", "1", "--warmup", "0", "--timeout-ms", "300", "--output", outputPath], {
         cwd: process.cwd(),
-        env: { ...process.env, OLLAMA_BASE_URL: `http://127.0.0.1:${addr.port}`, OLLAMA_THINK: "false" },
+        env: { ...process.env, OLLAMA_BASE_URL: `http://127.0.0.1:${addr.port}`, OLLAMA_THINK: "false", OLLAMA_MODEL: "qwen3:1.7b" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
@@ -65,6 +72,10 @@ for (const scenario of ["correct", "mixed"] as const) {
       const report = JSON.parse(await readFile(outputPath, "utf8"));
       assert.deepEqual([...seenModes].sort(), [false, true]);
       assert.equal(report.results.length, 10);
+      assert.equal(report.modelIdentityConsistent, true);
+      assert.equal(report.dataset.version, "supplier-extraction-v1");
+      assert.match(report.dataset.sha256, /^[a-f0-9]{64}$/);
+      assert.ok((await readFile(outputPath.replace(/\.json$/, ".md"), "utf8")).includes("Whole document"));
       assert.equal(report.warmupRows.length, 0);
       assert.equal(report.passed, scenario === "correct");
       assert.match(report.promptSha256, /^[a-f0-9]{64}$/);

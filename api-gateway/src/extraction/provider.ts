@@ -1,4 +1,8 @@
+import { sha256, type Provenance } from "./provenance.js";
+
 export interface ExtractionProvider {
+  metadata?(): Provenance;
+  describe?(signal?: AbortSignal): Promise<Provenance>;
   extract(document: string, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
@@ -6,6 +10,8 @@ export type OllamaProviderOptions = {
   baseUrl?: string;
   model?: string;
   think?: boolean;
+  temperature?: number;
+  seed?: number;
 };
 
 export const EXTRACTION_SYSTEM_PROMPT = `You are a secure data extraction engine.
@@ -30,12 +36,41 @@ export class OllamaExtractionProvider implements ExtractionProvider {
   readonly baseUrl: string;
   readonly model: string;
   readonly think: boolean;
+  readonly temperature: number | undefined;
+  readonly seed: number | undefined;
 
   constructor(options: OllamaProviderOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/+$/, "");
     this.model = options.model ?? process.env.OLLAMA_MODEL ?? "qwen3:1.7b";
     const thinkEnv = process.env.OLLAMA_THINK?.replace(/^["']|["']$/g, "").trim();
     this.think = options.think ?? (thinkEnv === "false" ? false : true);
+    this.temperature = options.temperature;
+    this.seed = options.seed;
+  }
+
+  metadata(): Provenance {
+    return { provider: "ollama", model: this.model, modelDigest: null, digestStatus: "unavailable",
+      observedAt: null, promptSha256: sha256(EXTRACTION_SYSTEM_PROMPT),
+      settings: { think: this.think, temperature: this.temperature ?? null, seed: this.seed ?? null, format: "json" } };
+  }
+
+  async describe(signal?: AbortSignal): Promise<Provenance> {
+    const metadata = this.metadata();
+    try {
+      const deadline = AbortSignal.timeout(2500);
+      const response = await fetch(`${this.baseUrl}/api/tags`, { signal: signal ? AbortSignal.any([signal, deadline]) : deadline });
+      if (!response.ok) { await response.body?.cancel(); return metadata; }
+      const payload = await response.json() as { models?: { name?: string; model?: string; digest?: string; remote_model?: string }[] };
+      const canonical = (name: string) => name.includes(":") ? name : `${name}:latest`;
+      const match = payload.models?.find(m => canonical(m.name ?? m.model ?? "") === canonical(this.model));
+      // A cloud alias digest does not identify remote model weights.
+      if (match && !match.remote_model && typeof match.digest === "string" && /^[a-f0-9]{64}$/i.test(match.digest)) {
+        metadata.modelDigest = match.digest;
+        metadata.digestStatus = "observed";
+        metadata.observedAt = new Date().toISOString();
+      }
+    } catch { /* Metadata lookup failure must not masquerade as a verified digest. */ }
+    return metadata;
   }
 
   async extract(document: string, options?: { signal?: AbortSignal }): Promise<unknown> {
@@ -53,6 +88,8 @@ export class OllamaExtractionProvider implements ExtractionProvider {
         stream: false,
         format: "json",
         think: this.think,
+        options: { ...(this.temperature === undefined ? {} : { temperature: this.temperature }),
+          ...(this.seed === undefined ? {} : { seed: this.seed }) },
       }),
       signal: options?.signal,
     });
