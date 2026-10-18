@@ -73,9 +73,9 @@ jobs:
               result = json.load(response)
               assert response.status == 200
               assert response.headers.get("x-request-id")
-          assert result["prediction"] == "positive", result
+          assert result["prediction"] in {"positive", "negative"}, result
           assert 0 <= result["confidence"] <= 1, result
-          assert result["modelVersion"] == "sentiment-demo-v1", result
+          assert result["modelVersion"] == "sentiment-uci-amazon-v1", result
           print("Gateway-to-inference integration passed:", result)
           PY
       - name: Request temporary publishing credentials

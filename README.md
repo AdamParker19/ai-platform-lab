@@ -4,12 +4,14 @@ A hands-on backend-to-MLOps learning project: a TypeScript API gateway calling a
 
 ## What's here
 
-- `inference-service/`: FastAPI, `/health`, `/predict`, a small scikit-learn sentiment classifier loaded once at startup.
+- `inference-service/`: FastAPI, `/health`, `/predict`, a versioned scikit-learn sentiment artifact loaded once at startup.
 - `api-gateway/`: Express + TypeScript, `/health`, `/api/analyze`, validation, a configurable inference deadline and graceful shutdown.
 - Both services emit JSON request logs with latency and a shared request ID. Input text is not logged.
 - Prediction responses include `prediction`, `confidence` and `modelVersion`.
 
-The classifier trains on twelve built-in examples at startup solely to make this lab self-contained. Its probabilities are **not calibrated confidence**, and it is not suitable for real sentiment analysis. Later we will separate training, evaluation and versioned artifact loading from serving.
+The classifier is trained offline on the free UCI Amazon sentiment subset. Startup loads the saved pipeline, verifies its checksum and dependency versions, and never trains. Its probabilities are **not calibrated confidence**, and small-dataset results are not a production quality claim.
+
+Start with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
 
 ## Run locally
 
@@ -20,6 +22,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r inference-service/requirements-dev.txt
 cd inference-service
+python train.py
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
@@ -68,16 +71,22 @@ Gateway behavior: invalid input → 400; oversized JSON body → 413; inference 
 
 `/health` is a local process/liveness check; gateway health does not assert downstream availability. Inference startup finishes loading its model before serving traffic.
 
-## Next session: build Docker and DevOps together
+## Containers and AWS
 
-1. Write the Python Dockerfile: base image, dependency layer, working directory, non-root user and server command.
-2. Write the gateway multi-stage Dockerfile: build TypeScript separately from runtime dependencies.
-3. Add `.dockerignore` files and Compose. Replace `127.0.0.1` with the inference service DNS name for container-to-container requests.
-4. Prove health, predictions, timeout behavior and logs in containers.
-5. Add CI to install locked dependencies, run checks and build images.
-6. Choose the AWS deployment and budget, then add image publishing, IAM, networking, secrets and deployment automation.
+```bash
+docker compose up --build --detach --wait
+# After your tests:
+docker compose down
+```
 
-No Dockerfiles, cloud infrastructure or deployment workflows are included yet: those are the next hands-on exercises. Before public deployment we still need authentication, rate limits, TLS, request-size limits at ingress, readiness strategy and cloud-specific hardening. Never commit AWS credentials.
+The inference Dockerfile trains in a build stage from the checksummed dataset;
+the runtime image contains its artifact, metadata, and evaluation report. It does
+not contact UCI during build or startup.
+
+Existing main-only GitHub workflows publish both images to ECR, deploy a 15-minute
+ECS lab with an independently verified shutdown schedule, and restore an earlier
+stopped service revision. Branch CI tests code without granting branch workflows
+AWS access. See the [walkthrough](docs/challenge-04-ml-to-aws.md).
 
 ## System-design exercise
 

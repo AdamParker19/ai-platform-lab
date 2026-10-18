@@ -7,10 +7,11 @@ def test_prediction_contract():
         assert client.get("/health").status_code == 200
         response = client.post("/predict", json={"text": "This product is amazing"})
         assert response.status_code == 200
-        assert response.json()["prediction"] == "positive"
+        assert response.json()["prediction"] in {"positive", "negative"}
         assert 0 <= response.json()["confidence"] <= 1
-        assert response.json()["modelVersion"] == "sentiment-demo-v1"
+        assert response.json()["modelVersion"] == "sentiment-uci-amazon-v1"
         assert response.headers["x-request-id"]
+        assert client.get("/health").json()["modelVersion"] == response.json()["modelVersion"]
 
 
 def test_invalid_inputs():

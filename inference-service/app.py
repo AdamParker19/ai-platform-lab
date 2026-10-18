@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
-from model import MODEL_VERSION, load_model, predict
+from model import load_model, predict
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("inference")
@@ -14,7 +14,7 @@ logger = logging.getLogger("inference")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load once per process. Later we will load a versioned artifact from storage.
+    # Load the pre-trained artifact once; startup fails if it is missing or incompatible.
     app.state.model = load_model()
     yield
     del app.state.model
@@ -52,8 +52,8 @@ async def request_logging(request: Request, call_next):
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "modelVersion": MODEL_VERSION}
+def health(request: Request):
+    return {"status": "ok", "modelVersion": request.app.state.model.metadata["modelVersion"]}
 
 
 @app.post("/predict", response_model=PredictionResponse)

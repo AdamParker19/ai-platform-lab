@@ -17,3 +17,6 @@ api-gateway/data/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Generated trusted model bundles and local evaluation output
+inference-service/artifacts/

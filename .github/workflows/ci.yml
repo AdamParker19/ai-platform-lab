@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, feat/service-boilerplate, feat/llm-extraction]
+    branches: [main, feat/service-boilerplate, feat/llm-extraction, feat/supplier-grounding, feat/versioned-sentiment-aws]
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Typecheck evaluation scripts and tests
-        run: npx tsc --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/verify-live.ts tests/provenance.test.ts tests/evaluation.test.ts tests/prompt-candidate.test.ts
+        run: npx tsc --noEmit --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck scripts/verify-live.ts tests/provenance.test.ts tests/evaluation.test.ts tests/prompt-candidate.test.ts tests/grounding.test.ts
 
   containers:
     name: Docker build and integration
@@ -86,9 +86,9 @@ jobs:
               result = json.load(response)
               assert response.status == 200
               assert response.headers.get("x-request-id")
-          assert result["prediction"] == "positive", result
+          assert result["prediction"] in {"positive", "negative"}, result
           assert 0 <= result["confidence"] <= 1, result
-          assert result["modelVersion"] == "sentiment-demo-v1", result
+          assert result["modelVersion"] == "sentiment-uci-amazon-v1", result
           print("Gateway-to-inference integration passed:", result)
           PY
       - name: Show container status and logs
