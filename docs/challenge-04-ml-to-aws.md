@@ -290,3 +290,27 @@ has demonstrated.
 - Persistence: https://scikit-learn.org/stable/model_persistence.html
 - ECS execution role: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html
 - Pricing: https://aws.amazon.com/fargate/pricing/
+
+## Troubleshooting: dataset checksum mismatch on Windows
+
+All tests may fail in fixture setup because they share a training bundle. This
+can be one dataset problem, not ten separate model bugs. Git's `core.autocrlf`
+may convert LF bytes to CRLF during checkout, changing SHA-256 without changing
+visible sentences. `.gitattributes` now disables text conversion for the pinned
+source file. The parser diagnoses line-ending changes but still rejects them.
+
+From `inference-service`, inspect and restore the source:
+
+```powershell
+Get-FileHash .\data\amazon_cells_labelled.txt -Algorithm SHA256
+python download_data.py
+python train.py
+python -m pytest -q
+```
+
+Expected SHA-256: `47003fc0a0d4840b00e96e715b6189bad09e7443a3da41c4cbe12ffc79f86ae3`.
+The CRLF-converted version hashes to
+`d631a137c89205e2b5091543d79d6f77e50446a11bab7bb7b9e528d46dd9a6dc`.
+An existing checkout may keep its converted bytes after pulling an attributes-only
+change; the verified downloader repairs that copy. Do not change the expected hash
+or disable validation to make an unexplained difference pass.

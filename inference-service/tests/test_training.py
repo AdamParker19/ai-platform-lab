@@ -93,3 +93,15 @@ def test_bad_dataset_hash_and_conflicting_annotations(tmp_path):
         read_reviews(source)
     with pytest.raises(ValueError, match="Conflicting labels"):
         read_reviews(source, expected_sha256=None)
+
+
+def test_crlf_conversion_is_diagnosed_without_bypassing_integrity(tmp_path):
+    from dataset import DATA_PATH, DATA_SHA256
+    source = tmp_path / "reviews.txt"
+    source.write_bytes(DATA_PATH.read_bytes().replace(b"\n", b"\r\n"))
+    with pytest.raises(ValueError, match="CRLF-to-LF conversion"):
+        read_reviews(source, DATA_SHA256)
+    # An actual edit must not be mistaken for harmless newline conversion.
+    source.write_bytes(source.read_bytes() + b"New review\t1\r\n")
+    with pytest.raises(ValueError, match="contents differ"):
+        read_reviews(source, DATA_SHA256)

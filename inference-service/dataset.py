@@ -15,7 +15,15 @@ def read_reviews(path: Path = DATA_PATH, expected_sha256: str | None = DATA_SHA2
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     if expected_sha256 and digest != expected_sha256:
-        raise ValueError("Dataset checksum mismatch; review changes before training")
+        lf_digest = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+        reason = (
+            " The file matches after CRLF-to-LF conversion; Git/editor line endings changed."
+            if lf_digest == expected_sha256 else " The file contents differ from the pinned source."
+        )
+        raise ValueError(
+            f"Dataset checksum mismatch: expected {expected_sha256}, got {digest}."
+            f"{reason} Run python download_data.py to restore the verified source bytes."
+        )
     rows = {}
     duplicates = 0
     for line_number, line in enumerate(raw.decode("utf-8").splitlines(), 1):
