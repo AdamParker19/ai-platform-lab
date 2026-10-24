@@ -16,6 +16,9 @@ services:
     build: ./api-gateway
     ports:
       - "127.0.0.1:3000:3000"
+    env_file:
+      - path: ./api-gateway/.env
+        required: false
     environment:
       INFERENCE_URL: http://inference:8000
       INFERENCE_TIMEOUT_MS: "3000"

@@ -1,29 +1,52 @@
-"""Tiny training fixture for serving practice, not a useful sentiment model."""
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline
+"""Serving loads a trusted, versioned artifact. It never fits a model."""
+from dataclasses import dataclass
+import hashlib
+import importlib.metadata
+import json
+import os
+from pathlib import Path
+import platform
+from typing import Any
 
-MODEL_VERSION = "sentiment-demo-v1"
-
-
-def load_model():
-    samples = [
-        "This product is amazing", "I love this", "Excellent quality",
-        "Great experience", "Really happy with this", "Fantastic service",
-        "This product is terrible", "I hate this", "Awful quality",
-        "Bad experience", "Really disappointed with this", "Horrible service",
-    ]
-    labels = ["positive"] * 6 + ["negative"] * 6
-    model = make_pipeline(TfidfVectorizer(), LogisticRegression(random_state=42))
-    model.fit(samples, labels)
-    return model
+import joblib
 
 
-def predict(model, text: str) -> dict:
-    probabilities = model.predict_proba([text])[0]
+@dataclass
+class ModelBundle:
+    pipeline: Any
+    metadata: dict
+
+
+def load_model(directory: Path | None = None) -> ModelBundle:
+    directory = directory or Path(os.environ.get("MODEL_DIR", Path(__file__).parent / "artifacts"))
+    try:
+        metadata = json.loads((directory / "metadata.json").read_text(encoding="utf-8"))
+        artifact = directory / "model.joblib"
+        artifact_bytes = artifact.read_bytes()
+    except FileNotFoundError as exc:
+        raise RuntimeError("Model artifact missing. Run python train.py before starting inference.") from exc
+    if not isinstance(metadata.get("modelVersion"), str) or not metadata["modelVersion"].strip():
+        raise RuntimeError("Model metadata has no version")
+    if hashlib.sha256(artifact_bytes).hexdigest() != metadata.get("artifactSha256"):
+        raise RuntimeError("Model artifact checksum mismatch")
+    if metadata.get("pythonVersion", "").split(".")[:2] != platform.python_version().split(".")[:2]:
+        raise RuntimeError("Training and serving Python major/minor versions differ")
+    dependencies = metadata.get("dependencies", {})
+    for name in ("scikit-learn", "numpy", "scipy", "joblib"):
+        if dependencies.get(name) != importlib.metadata.version(name):
+            raise RuntimeError(f"Training and serving dependency mismatch: {name}")
+    # This is our own artifact. A checksum detects corruption, not an untrusted publisher.
+    pipeline = joblib.load(artifact)
+    if set(pipeline.classes_) != {"negative", "positive"}:
+        raise RuntimeError("Unexpected model classes")
+    return ModelBundle(pipeline, metadata)
+
+
+def predict(model: ModelBundle, text: str) -> dict:
+    probabilities = model.pipeline.predict_proba([text])[0]
     index = int(probabilities.argmax())
     return {
-        "prediction": str(model.classes_[index]),
+        "prediction": str(model.pipeline.classes_[index]),
         "confidence": float(probabilities[index]),
-        "modelVersion": MODEL_VERSION,
+        "modelVersion": model.metadata["modelVersion"],
     }

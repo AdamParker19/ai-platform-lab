@@ -1,0 +1,8 @@
+{
+  "watch": [
+    "src",
+    ".env"
+  ],
+  "ext": "ts,json",
+  "exec": "node --import tsx src/index.ts"
+}

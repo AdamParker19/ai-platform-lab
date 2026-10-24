@@ -1,0 +1,33 @@
+# Local-only overlay: docker compose -f compose.yaml -f compose.jobs.yaml up --build -d
+services:
+  gateway:
+    environment:
+      JOBS_ENABLED: "true"
+      JOB_DB_PATH: /app/data/extraction-jobs.sqlite
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - extraction-jobs:/app/data
+
+  extraction-worker:
+    build: ./api-gateway
+    command: ["node", "dist/jobs/worker-main.js"]
+    env_file:
+      - path: ./api-gateway/.env
+        required: false
+    environment:
+      JOBS_ENABLED: "true"
+      JOB_DB_PATH: /app/data/extraction-jobs.sqlite
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - extraction-jobs:/app/data
+    depends_on:
+      gateway:
+        condition: service_healthy
+    stop_grace_period: 130s
+
+volumes:
+  extraction-jobs:

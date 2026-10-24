@@ -1,0 +1,2 @@
+# Preserve the original UCI bytes: dataset.py verifies their SHA-256.
+inference-service/data/amazon_cells_labelled.txt -text
