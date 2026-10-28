@@ -1,5 +1,6 @@
 """Test a locally running SageMaker-compatible container; no AWS calls."""
 import argparse
+import http.client
 import json
 import time
 import urllib.error
@@ -13,7 +14,7 @@ def smoke(base_url):
             with urllib.request.urlopen(base_url + "/ping", timeout=2) as response:
                 health = json.load(response)
             break
-        except (urllib.error.URLError, TimeoutError):
+        except (OSError, http.client.HTTPException):
             if time.monotonic() >= deadline:
                 raise TimeoutError("SageMaker /ping did not become ready within 90 seconds")
             time.sleep(1)
