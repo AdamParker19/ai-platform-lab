@@ -20,3 +20,4 @@ api-gateway/data/
 
 # Generated trusted model bundles and local evaluation output
 inference-service/artifacts/
+sagemaker-output/

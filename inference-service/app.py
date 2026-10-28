@@ -52,10 +52,12 @@ async def request_logging(request: Request, call_next):
 
 
 @app.get("/health")
+@app.api_route("/ping", methods=["GET", "POST"], include_in_schema=False)
 def health(request: Request):
     return {"status": "ok", "modelVersion": request.app.state.model.metadata["modelVersion"]}
 
 
 @app.post("/predict", response_model=PredictionResponse)
+@app.post("/invocations", response_model=PredictionResponse, include_in_schema=False)
 def prediction(body: PredictionRequest, request: Request):
     return predict(request.app.state.model, body.text)
