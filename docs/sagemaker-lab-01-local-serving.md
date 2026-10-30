@@ -83,6 +83,9 @@ docker rm --force sagemaker-lab-local
 
 ## Verification and next AWS step
 
+Continue with [lab 2: publish the serving image](sagemaker-lab-02-publish-image.md)
+after completing the local checks below.
+
 Python tests cover both route contracts, packaging/extraction, deterministic
 repackaging, corrupt bundles, and failed startup with missing artifacts. CI also
 builds both Docker targets and invokes the mounted artifact over HTTP.
