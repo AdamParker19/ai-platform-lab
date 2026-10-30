@@ -7,3 +7,4 @@ tests/
 *.log
 artifacts/
 requirements-dev.txt
+sagemaker-output/

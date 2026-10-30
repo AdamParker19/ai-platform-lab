@@ -1,0 +1,96 @@
+name: Publish SageMaker image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-sagemaker-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Test and publish the SageMaker runtime
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-south-1
+      ECR_REGISTRY: 501683248889.dkr.ecr.ap-south-1.amazonaws.com
+      IMAGE_TAG: sagemaker-sha-${{ github.sha }}-run-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: inference-service/requirements-dev.txt
+      - name: Run Python tests
+        working-directory: inference-service
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q
+      - name: Test deployment and readiness safeguards without AWS access
+        run: python -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Build model archive with serving dependencies
+        run: docker build --platform linux/amd64 -f inference-service/Dockerfile.sagemaker --target artifacts --output type=local,dest=./sagemaker-output inference-service
+      - name: Build the inference-only image
+        run: docker build --platform linux/amd64 -f inference-service/Dockerfile.sagemaker --target runtime -t ai-platform-lab-sagemaker:publish inference-service
+      - name: Start the image with an external model bundle
+        run: |
+          mkdir -p sagemaker-output/model
+          tar -xzf sagemaker-output/model.tar.gz -C sagemaker-output/model
+          docker run --detach --name sagemaker-publish-check -p 127.0.0.1:18080:8080 \
+            --mount "type=bind,source=$PWD/sagemaker-output/model,target=/opt/ml/model,readonly" \
+            ai-platform-lab-sagemaker:publish serve
+      - name: Verify readiness and prediction over HTTP
+        run: python scripts/smoke_sagemaker.py
+      - name: Request temporary publishing credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::501683248889:role/ai-platform-lab-github-publisher
+          role-session-name: github-sm-publish-${{ github.run_id }}
+          role-duration-seconds: 900
+          allowed-account-ids: "501683248889"
+          retry-max-attempts: 3
+          unset-current-credentials: true
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: "501683248889"
+          mask-password: "true"
+      - name: Publish the tested runtime and record its digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_uri="$ECR_REGISTRY/ai-platform-lab/inference:$IMAGE_TAG"
+          docker tag ai-platform-lab-sagemaker:publish "$image_uri"
+          docker push "$image_uri"
+          digest_uri=$(docker image inspect "$image_uri" --format '{{index .RepoDigests 0}}')
+          if [[ ! "$digest_uri" =~ ^501683248889\.dkr\.ecr\.ap-south-1\.amazonaws\.com/ai-platform-lab/inference@sha256:[0-9a-f]{64}$ ]]; then
+            echo "Expected a published inference image digest"
+            exit 1
+          fi
+          {
+            echo "### SageMaker inference runtime"
+            echo "- Source commit: $GITHUB_SHA"
+            echo "- Image tag URI: $image_uri"
+            echo "- Image digest URI: $digest_uri"
+            echo "- Platform: linux/amd64"
+            echo "- Model archive: supplied separately through S3 at deployment"
+            echo "Published to ECR. No ECS service or SageMaker endpoint was started."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Show serving logs
+        if: always()
+        run: docker logs sagemaker-publish-check || true
+      - name: Remove the test container
+        if: always()
+        run: docker rm --force sagemaker-publish-check || true

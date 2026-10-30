@@ -1,0 +1,28 @@
+FROM python:3.12-slim AS base
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Export a trusted archive trained with the SAME Python and packages as serving.
+FROM base AS training
+COPY dataset.py train.py model.py package_model.py ./
+COPY data/ ./data/
+ARG MODEL_VERSION=sentiment-uci-amazon-v1
+RUN python train.py --output /trained --version "$MODEL_VERSION"
+RUN python package_model.py --model-dir /trained --output /model.tar.gz
+
+FROM scratch AS artifacts
+COPY --from=training /model.tar.gz /model.tar.gz
+COPY --from=training /trained/metadata.json /metadata.json
+COPY --from=training /trained/evaluation.json /evaluation.json
+
+# SageMaker provides the extracted S3 archive at /opt/ml/model before startup.
+# AWS's custom-inference contract expects root; ECS uses its separate Dockerfile.
+FROM base AS runtime
+ENV MODEL_DIR=/opt/ml/model
+COPY app.py model.py serve.py ./
+EXPOSE 8080
+ENTRYPOINT ["python", "serve.py"]
+CMD ["serve"]
