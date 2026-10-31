@@ -107,63 +107,91 @@ produce an empty table without identifying which filter excluded the results.
 The `Total` count distinguishes an empty catalog response from an empty Amazon
 subset. No model is invoked by this discovery command.
 
-The caller must have `bedrock:ListFoundationModels` for discovery. Listing a
-model does not prove that the account can invoke it. Choose a small text model
-that supports Converse and direct on-demand invocation in Mumbai. Check the
-current model documentation, account eligibility and pricing before invoking.
-No model ID or price is assumed in the code.
+The caller needs `bedrock:ListFoundationModels` for catalog discovery and
+`bedrock:ListInferenceProfiles` for the next command. Listing a model or an
+`ACTIVE` profile does not prove that this identity can invoke it.
 
-For the core lab, use a direct regional foundation model. If AWS requires an
-inference profile instead, review its model resources, destination regions,
-permissions and pricing before using it; changing the string alone is not a
-complete IAM setup.
+Our account's Mumbai catalog on 31 October 2026 reports `INFERENCE_PROFILE` for
+the Amazon text models, including Nova Micro. The earlier `ON_DEMAND` filter
+excluded them. Use an existing system-defined profile; no new profile or
+endpoint is needed. From the same PowerShell terminal:
 
-Grant the invoking identity a policy scoped to the selected model. Replace the
-placeholder with the exact model ID returned by discovery:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DiscoverRegionalModels",
-      "Effect": "Allow",
-      "Action": "bedrock:ListFoundationModels",
-      "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "ap-south-1" } }
-    },
-    {
-      "Sid": "InvokeSelectedModel",
-      "Effect": "Allow",
-      "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:ap-south-1::foundation-model/<MODEL_ID_FROM_DISCOVERY>",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "ap-south-1" } }
-    }
-  ]
-}
+```powershell
+aws bedrock list-inference-profiles --region ap-south-1 --type-equals SYSTEM_DEFINED --query "{Total:length(inferenceProfileSummaries),NovaMicro:inferenceProfileSummaries[?contains(inferenceProfileId, 'nova-micro')].{Id:inferenceProfileId,Arn:inferenceProfileArn,Status:status,Models:models[].modelArn}}" --output json --no-cli-pager
 ```
 
-`Converse` uses the `bedrock:InvokeModel` permission. This policy belongs to the
-identity running the SDK, not the SageMaker execution role. The foundation-model
-ARN has an empty account segment (`::`); that is intentional. Never put access
-keys in the provider or commit credentials. This lab creates no IAM role or AWS
-deployment automatically.
+The account returned the active profile `apac.amazon.nova-micro-v1:0`, with ARN
+`arn:aws:bedrock:ap-south-1:501683248889:inference-profile/apac.amazon.nova-micro-v1:0`.
+Its returned destination model ARNs cover these Regions:
+
+| Region | Location |
+| --- | --- |
+| `ap-south-1` | Mumbai |
+| `ap-southeast-2` | Sydney |
+| `ap-northeast-1` | Tokyo |
+| `ap-northeast-2` | Seoul |
+| `ap-southeast-1` | Singapore |
+| `ap-northeast-3` | Osaka |
+
+Requests enter Bedrock in Mumbai and may be processed in any of those Regions.
+Use only the lab's synthetic documents. The profile does not promise India-only
+processing. Inspect the actual returned ARNs rather than guessing destinations
+from the `apac` prefix. The SDK's `modelId` parameter accepts this profile ID or
+ARN; it does not require a provider code change.
+
+The exact invocation policy is in
+[bedrock-nova-micro-invoke-policy.json](bedrock-nova-micro-invoke-policy.json).
+It grants non-streaming `bedrock:InvokeModel` on the profile and its six model
+ARNs. The model statement uses `bedrock:InferenceProfileArn` to allow those model
+resources only through this profile. Do not replace it with a grant on only the
+Mumbai foundation-model ARN. An explicit region Deny or organization SCP that
+blocks a destination can still block the profile.
+
+Attach the policy to the IAM user or role used by the local SDK. Identify it
+using `aws sts get-caller-identity --no-cli-pager` in the same Windows terminal
+where you will run Node, with the intended project credentials/profile selected.
+CloudShell's identity can differ from Windows. This is not a permission for the
+SageMaker execution role. If the ARN is an STS assumed-role ARN, the policy
+belongs on the underlying IAM role, not the temporary session. If the local
+profile is missing or the ARN ends in `:root`, resolve the project identity before
+running the live test; do not create root access keys for this lab.
+
+The policy file contains invocation grants only; retain separately reviewed
+discovery permissions if needed. It does not remove permissions granted by other
+policies or override explicit Deny statements. The foundation-model ARNs have an
+empty account segment (`::`); that is intentional. Never put access keys in the
+provider or commit credentials. This lab creates no IAM role or AWS deployment
+automatically.
 
 ## 4. Run the explicitly enabled live smoke check
 
-First review the selected model's current regional input/output rates and your
-remaining AWS credits. Set these variables to actual values from that review:
+First review your remaining AWS credits and the selected model's current rates.
+Inference-profile pricing is based on the source Region (Mumbai here).
+
+On 31 October 2026, AWS's
+[Mumbai Bedrock price list](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-south-1/index.json)
+(published `2026-10-30T16:04:56Z`, terms effective `2026-10-01T00:00:00Z`)
+lists these standard on-demand Nova Micro rates:
+
+| Usage | USD per 1,000 tokens | USD per million tokens |
+| --- | --- | --- |
+| Input | $0.000041 | $0.041 |
+| Output | $0.000164 | $0.164 |
+
+These are not batch or cache-read rates. The runner does not request prompt
+caching. Recheck rates for later runs or a different model/Region. After the
+invoking identity and policy are ready, run from `api-gateway`:
 
 ```powershell
 $env:BEDROCK_REGION = "ap-south-1"
-$env:BEDROCK_MODEL_ID = "<SELECTED_AVAILABLE_MODEL_ID>"
+$env:BEDROCK_MODEL_ID = "apac.amazon.nova-micro-v1:0"
 $env:BEDROCK_PROMPT_VARIANT = "evidence-v2"
-$inputPrice = "<CURRENT_USD_PER_MILLION_INPUT_TOKENS>"
-$outputPrice = "<CURRENT_USD_PER_MILLION_OUTPUT_TOKENS>"
+$inputPrice = "0.041"
+$outputPrice = "0.164"
 npm run verify:bedrock -- --live --input-usd-per-million $inputPrice --output-usd-per-million $outputPrice
 ```
 
-Replace every placeholder. Both price arguments are required in live mode. The
+Both price arguments are required in live mode. The
 rates are used for reporting; they do not set an AWS billing cap. Cost is a
 token-only estimate from observed usage, not a bill. A timeout with no returned
 usage has unknown cost, not zero cost.
@@ -181,8 +209,8 @@ exact-match rate. A complete five-case run is still only a smoke check, not a
 representative accuracy benchmark or a p95 performance measurement. Report files
 use new names, and an explicitly reused path is rejected before inference.
 
-The runner does not provision an endpoint or vector database. After a direct
-on-demand run there is no endpoint to delete; review any other resources you
+The runner does not provision an endpoint or vector database. After this
+profile-based run there is no endpoint to delete; review any other resources you
 create separately. Offline report files remain local and are gitignored.
 
 ## Acceptance and certification alignment
@@ -207,6 +235,9 @@ RAG, vector databases, agents and managed training pipelines are later labs.
 - [Converse API, permissions, usage and metrics](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
 - [SDK default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html)
 - [Bedrock IAM examples](https://docs.aws.amazon.com/bedrock/latest/userguide/security_iam_id-based-policy-examples.html)
+- [Inference profiles and source-Region pricing](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html)
+- [Inference profile IAM prerequisites](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html)
+- [List inference profiles](https://docs.aws.amazon.com/cli/latest/reference/bedrock/list-inference-profiles.html)
 - [Supported models and features](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html)
 - [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
 - [MLA-C02 guide](https://docs.aws.amazon.com/aws-certification/latest/machine-learning-engineer-associate-02/machine-learning-engineer-associate-02.html)
