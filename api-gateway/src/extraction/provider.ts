@@ -1,10 +1,12 @@
 import { sha256, type Provenance } from "./provenance.js";
 import { parsePromptVariant, systemPrompt, type PromptVariant } from "./prompts.js";
 
+export type ExtractionOptions = { signal?: AbortSignal; requestId?: string };
+
 export interface ExtractionProvider {
   metadata?(): Provenance;
   describe?(signal?: AbortSignal): Promise<Provenance>;
-  extract(document: string, options?: { signal?: AbortSignal }): Promise<unknown>;
+  extract(document: string, options?: ExtractionOptions): Promise<unknown>;
 }
 
 export type OllamaProviderOptions = {

@@ -23,7 +23,7 @@ export class ExtractionWorker {
         const metadata = await this.provider.describe?.(controller.signal);
         if (controller.signal.aborted) throw new Error("deadline");
         if (metadata && !this.store.recordProvenance(job.id, job.token!, metadata)) throw new Error("lease lost");
-        return this.extractor.extract(job.document, { signal: controller.signal });
+        return this.extractor.extract(job.document, { signal: controller.signal, requestId: job.request_id });
       };
       const result = await Promise.race([extract(), deadline]);
       const saved = this.store.succeed(job.id, job.token!, result);
