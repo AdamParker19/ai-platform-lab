@@ -98,8 +98,14 @@ Use an existing scoped project profile. The commands below use the project's
 ```powershell
 $env:AWS_PROFILE = "ai-platform-lab"
 aws sts get-caller-identity --profile $env:AWS_PROFILE
-aws bedrock list-foundation-models --region ap-south-1 --by-provider Amazon --by-output-modality TEXT --by-inference-type ON_DEMAND --query "modelSummaries[].{Model:modelId,Provider:providerName}" --output table
+aws bedrock list-foundation-models --region ap-south-1 --query "{Total:length(modelSummaries),AmazonModels:modelSummaries[?starts_with(modelId, 'amazon.')].{Model:modelId,Provider:providerName,Output:outputModalities,Inference:inferenceTypesSupported}}" --output json --no-cli-pager
 ```
+
+Start with an unfiltered regional API request, then inspect Amazon model IDs in
+the response. Applying provider, modality and inference filters together can
+produce an empty table without identifying which filter excluded the results.
+The `Total` count distinguishes an empty catalog response from an empty Amazon
+subset. No model is invoked by this discovery command.
 
 The caller must have `bedrock:ListFoundationModels` for discovery. Listing a
 model does not prove that the account can invoke it. Choose a small text model
