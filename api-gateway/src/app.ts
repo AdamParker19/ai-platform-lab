@@ -135,7 +135,7 @@ export function createApp(config: GatewayConfig) {
 
     const signal = AbortSignal.timeout(llmTimeoutMs);
     try {
-      const extraction = await extractor.extract(trimmedDocument, { signal });
+      const extraction = await extractor.extract(trimmedDocument, { signal, requestId: res.locals.requestId });
       res.json(extraction);
     } catch (error: unknown) {
       const isAborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
