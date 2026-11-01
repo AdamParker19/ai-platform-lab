@@ -50,7 +50,7 @@ for (const scenario of ["correct", "mixed"] as const) {
       if (scenario === "mixed") {
         if (!payload.think && raw.includes("IMPORTANT")) actual = { ...actual, supplierName: "HACKED" };
         if (payload.think && raw.includes("Nordic Industrial")) return; // Genuine hanging HTTP dependency.
-        if (payload.think && raw.includes("Composite Gaskets")) { res.writeHead(500).end(); return; }
+        if (payload.think && raw.includes("Composite Gaskets")) { res.writeHead(500).end("PRIVATE UPSTREAM RESPONSE"); return; }
         if (payload.think && raw.includes("Alpine")) actual = {};
       }
       res.setHeader("content-type", "application/json");
@@ -72,6 +72,8 @@ for (const scenario of ["correct", "mixed"] as const) {
       child.stderr!.on("data", chunk => output += chunk);
       const [code] = await once(child, "exit");
       assert.equal(code, scenario === "correct" ? 0 : 1, output);
+      assert.match(output, /Starting local Ollama evaluation; AWS is not contacted/);
+      assert.match(output, /Starting thinking=/);
       const report = JSON.parse(await readFile(outputPath, "utf8"));
       assert.deepEqual([...seenModes].sort(), [false, true]);
       assert.equal(report.results.length, 10);
@@ -117,6 +119,12 @@ for (const scenario of ["correct", "mixed"] as const) {
         assert.equal(report.summary[1].invalidResponses, 1);
         assert.equal(report.summary[1].successRate, 0.4);
         assert.ok(report.results.some((row: { actual: { supplierName?: string } | null }) => row.actual?.supplierName === "HACKED"));
+        const upstreamError = report.results.find((row: { outcome: string }) => row.outcome === "provider_error");
+        assert.equal(upstreamError.diagnostic.source, "provider");
+        assert.equal(upstreamError.diagnostic.httpStatus, 500);
+        assert.match(output, /upstreamHttpStatus=500/);
+        assert.ok(!output.includes("PRIVATE UPSTREAM RESPONSE"));
+        assert.ok(!JSON.stringify(report).includes("PRIVATE UPSTREAM RESPONSE"));
       }
     } finally {
       if (child && child.exitCode === null) child.kill();
@@ -126,3 +134,33 @@ for (const scenario of ["correct", "mixed"] as const) {
     }
   });
 }
+
+test("evaluation reports an actual refused Ollama connection without exposing raw provider errors", { timeout: 15000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "extraction-network-"));
+  const closedServer = createServer().listen(0, "127.0.0.1");
+  await once(closedServer, "listening");
+  const addr = closedServer.address();
+  assert.ok(addr && typeof addr !== "string");
+  await new Promise<void>(done => closedServer.close(() => done()));
+  let child: ReturnType<typeof spawn> | undefined;
+  try {
+    const outputPath = join(directory, "report.json");
+    child = spawn(process.execPath, ["--import", "tsx", "scripts/verify-live.ts", "--runs", "1", "--thinking", "off", "--warmup", "0", "--timeout-ms", "300", "--output", outputPath], {
+      cwd: process.cwd(), env: { ...process.env, OLLAMA_BASE_URL: `http://127.0.0.1:${addr.port}`, OLLAMA_MODEL: "qwen3:1.7b" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout!.on("data", chunk => output += chunk);
+    child.stderr!.on("data", chunk => output += chunk);
+    const [code] = await once(child, "exit");
+    assert.equal(code, 1, output);
+    const report = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.ok(report.results.every((row: { outcome: string; diagnostic: { source: string; code: string } }) =>
+      row.outcome === "provider_error" && row.diagnostic.source === "provider" && row.diagnostic.code === "ECONNREFUSED"));
+    assert.match(output, /source=provider .*code=ECONNREFUSED/);
+    assert.ok(!output.includes(`127.0.0.1:${addr.port}`));
+  } finally {
+    if (child && child.exitCode === null) child.kill();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -1,5 +1,5 @@
 import { extractionSchema, type ExtractionResult } from "./schema.js";
-import type { ExtractionProvider } from "./provider.js";
+import type { ExtractionOptions, ExtractionProvider } from "./provider.js";
 import { verifySupplier, type GroundingResult } from "./grounding.js";
 
 export interface GroundedExtractionResult {
@@ -17,13 +17,13 @@ export class ExtractionValidationError extends Error {
 export class Extractor {
   constructor(private readonly provider: ExtractionProvider) {}
 
-  async extractWithGrounding(document: string, options?: { signal?: AbortSignal }): Promise<GroundedExtractionResult> {
+  async extractWithGrounding(document: string, options?: ExtractionOptions): Promise<GroundedExtractionResult> {
     // Reuse schema validation; invalid model output never reaches grounding.
     const extraction = await this.extract(document, options);
     return { extraction, grounding: verifySupplier(document, extraction.supplierName) };
   }
 
-  async extract(document: string, options?: { signal?: AbortSignal }): Promise<ExtractionResult> {
+  async extract(document: string, options?: ExtractionOptions): Promise<ExtractionResult> {
     const rawResult = await this.provider.extract(document, options);
     const parsed = extractionSchema.safeParse(rawResult);
     if (!parsed.success) {

@@ -12,10 +12,12 @@
     "start": "node dist/index.js",
     "test": "node --import tsx --test tests/*.test.ts",
     "verify:live": "node --import tsx scripts/verify-live.ts",
+    "verify:bedrock": "node --import tsx scripts/bedrock-smoke.ts",
     "worker:dev": "node --import tsx src/jobs/worker-main.ts",
     "worker": "node dist/jobs/worker-main.js"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1161.0",
     "dotenv": "^18.0.7",
     "express": "^5.1.0",
     "zod": "^4.6.5"

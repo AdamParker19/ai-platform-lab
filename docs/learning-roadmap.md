@@ -1,12 +1,16 @@
 # Learning roadmap: ML engineering, AWS, and reliable backends
 
-Updated: 2026-10-06. Owner: Anmol. Project: AdamParker19/ai-platform-lab.
+Updated: 2026-10-31. Owner: Anmol. Project: AdamParker19/ai-platform-lab.
 
 ## Goal and certification target
 
 Build the understanding and practical evidence to prepare for AWS Certified Machine Learning Engineer – Associate, using the updated MLA-C02 exam guide. The English C02 exam is currently in beta; recheck the current exam version and registration details before booking. AWS's overview currently uses ME1-C02 in its beta registration table while the detailed guide uses MLA-C02.
 
 The updated guide includes traditional ML, foundation models, generative AI, RAG, and agentic workflows. We will cover these explicitly. Certification preparation is one track; backend reliability and system design are a second track that deliberately goes beyond the exam.
+
+Build progressively toward AWS Certified Generative AI Developer – Professional,
+AIP-C01, alongside the associate work. The Bedrock labs connect foundation-model
+integration, evaluation, safety, observability and cost optimization to both guides.
 
 This roadmap is a learning plan, not a promise of a passing result or a substitute for practical experience. AWS describes its target candidate as having roughly a year of AWS ML engineering experience and a year in a related technical role. We will advance by demonstrated competence, not by a calendar alone.
 
@@ -18,12 +22,15 @@ Already demonstrated in this project:
 - Request-ID correlation and structured logs.
 - Scoped IAM, GitHub OIDC, immutable ECR image publication.
 - ECS/Fargate deployment, scheduled shutdown, and stopped-service task-definition rollback.
+- Offline UCI sentiment training, checksummed artifacts, a held-out evaluation and dependency-checked serving.
+- Custom SageMaker Serverless hosting with separate ECR image and S3 model archive; successful live prediction and endpoint deletion.
+- CloudWatch diagnosis of one invocation: about 243 ms model latency, 5.24 s setup time and 5.51 s overhead. These are not representative latency percentiles.
 
 Important limits:
 - The sentiment model is a tiny teaching model, not a validated production model.
 - Request IDs provide correlation; we have not demonstrated full distributed tracing.
 - The rollback exercise changed the task-definition revision while stopped. It did not demonstrate recovery from a bad live model release.
-- SageMaker, managed ML pipelines, data quality, drift, and GenAI are upcoming work.
+- SageMaker managed Training jobs, Pipelines, Model Registry, drift and managed GenAI integration remain future work. The demonstrated model was trained in Docker and hosted by SageMaker.
 - Keep ECS stopped between cloud exercises.
 
 ## Study rhythm
@@ -74,22 +81,19 @@ This is our teaching allocation. Many modules touch more than one domain.
 
 Service names in the table are a syllabus, not instructions to provision everything. For each service, learn its purpose, when to choose it, when not to choose it, security boundaries, failure behavior, and cost drivers. AWS-native CI/CD must be understood even though our working pipeline uses GitHub Actions.
 
-## First upcoming challenge: model evaluation
+## Current challenge: Bedrock provider and measured extraction
 
-Keep ECS stopped. This exercise runs locally.
+Follow [Bedrock lab 1](bedrock-lab-01-provider-and-evaluation.md). The prepared code
+adds a Converse provider behind the existing extraction interface. Begin with the
+offline five-case run, then review account access, a regional model and current
+token prices before explicitly enabling the bounded live run.
 
-Outcome: a reproducible report for sentiment-demo-v1 that tells us where it works and where it fails.
-
-1. Explain precision and recall with a small confusion matrix before coding.
-2. Create a small, balanced, manually labeled evaluation dataset that is separate from the original training examples. Include negation, mixed sentiment, unseen vocabulary, and ambiguous inputs.
-3. Decide how ambiguous or neutral examples should be handled by a binary classifier. Record the limitation rather than forcing misleading labels.
-4. Use validation examples for iteration and preserve a separate final test set. Do not repeatedly tune against the final test.
-5. Report confusion matrix, precision, recall, F1, sample counts, and concrete mistakes. Small samples are learning evidence, not a production-quality guarantee.
-6. Check deterministic runs and save model version, dataset version, and configuration in the report.
-7. Define a proposed release quality gate before evaluating a future candidate. Do not lower it merely to make CI green.
-8. Explain why the earlier confidence near 0.54 is a model output, not proof of calibrated certainty.
-
-Suggested repository deliverables: evaluation data, evaluation script, model card, and a short report. No cloud endpoint is needed.
+Keep schema validity, supplier source agreement, source authenticity and whole
+extraction quality separate. Record model and prompt identity, per-case outcomes,
+client/service latency, observed token usage and a qualified cost estimate.
+The live portion is incomplete until actual AWS responses have been observed.
+The core is scoped to 1–2 hours once account access is available; RAG, vector
+databases, managed agents and pipeline deployment are subsequent increments.
 
 ## Budget and account constraints
 
@@ -117,7 +121,10 @@ Before booking:
 
 AWS's published non-beta minimum is a scaled score of 720; that is not the same as 72% correct. Beta details can differ.
 
-After the associate preparation, consider AWS MLOps Demonstrated as an optional practical credential. Choose additional certifications only if they serve a concrete role goal; do not stack exams before building understanding.
+AWS MLOps Demonstrated remains a near-term hands-on learning goal alongside the
+associate preparation. The current custom sentiment hosting lab is preparation,
+not completion of that assessment. Build toward AIP-C01 through tested GenAI
+applications while retaining the traditional ML/data/pipeline coverage of MLA-C02.
 
 ## Official references
 
@@ -127,3 +134,4 @@ After the associate preparation, consider AWS MLOps Demonstrated as an optional 
 - [Model development domain](https://docs.aws.amazon.com/aws-certification/latest/machine-learning-engineer-associate-02/machine-learning-engineer-associate-02-domain2.html)
 - [Deployment domain](https://docs.aws.amazon.com/aws-certification/latest/machine-learning-engineer-associate-02/machine-learning-engineer-associate-02-domain3.html)
 - [Operations and security domain](https://docs.aws.amazon.com/aws-certification/latest/machine-learning-engineer-associate-02/machine-learning-engineer-associate-02-domain4.html)
+- [Generative AI Developer Professional guide](https://docs.aws.amazon.com/aws-certification/latest/ai-professional-01/ai-professional-01.html)

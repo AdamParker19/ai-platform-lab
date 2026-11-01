@@ -13,6 +13,10 @@ The classifier is trained offline on the free UCI Amazon sentiment subset. Start
 
 Start with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
 
+Continue with [Bedrock lab 1: provider and evaluation](docs/bedrock-lab-01-provider-and-evaluation.md)
+for a five-case extraction smoke check with offline mocks, explicit live-call controls,
+schema validation, supplier grounding, and latency/token/cost evidence.
+
 ## Run locally
 
 Terminal 1, from the repository root (Bash/WSL/macOS/Linux):
