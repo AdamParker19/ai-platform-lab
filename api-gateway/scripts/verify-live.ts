@@ -94,6 +94,7 @@ async function attempt(url: string, doc: Awaited<ReturnType<typeof loadDataset>>
 }
 
 async function main() {
+  console.error("[verify-live] Starting local Ollama evaluation; AWS is not contacted.");
   const config = options();
   const baseline = config.baselineReport
     ? parseExperimentReport(JSON.parse(await readFile(resolve(config.baselineReport), "utf8"))) : undefined;
@@ -104,7 +105,7 @@ async function main() {
   const dataset = await loadDataset(config.split);
   const documents = dataset.documents;
   let codeRevision: string | null = null;
-  try { codeRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* source archive */ }
+  try { codeRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, windowsHide: true }).trim(); } catch { /* unavailable or timed out */ }
   const observations: { thinking: boolean; before: Awaited<ReturnType<OllamaExtractionProvider["describe"]>>; after: Awaited<ReturnType<OllamaExtractionProvider["describe"]>> }[] = [];
   const baseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
   const parsedUrl = new URL(baseUrl);
@@ -153,6 +154,7 @@ async function main() {
         console.log(`${prefix}: ${row.outcome} (${row.latencyMs}ms) httpStatus=${row.httpStatus ?? "unknown"} requestId=${row.requestId ?? "unknown"}${detail}`);
       };
       for (let run = 1; run <= config.warmup; run++) {
+        console.log(`Starting warm-up thinking=${thinking} run=${run}`);
         const row = await attempt(url, documents[0]!, thinking, run, config.timeoutMs);
         logOutcome(`Warm-up thinking=${thinking}, excluded from measured summary`, row);
         warmupRows.push(row);
@@ -161,6 +163,7 @@ async function main() {
       for (let run = 1; run <= config.runs; run++) {
         for (let offset = 0; offset < documents.length; offset++) {
           const doc = documents[(offset + run - 1) % documents.length]!;
+          console.log(`Starting thinking=${thinking} run=${run} ${doc.id}`);
           const row = await attempt(url, doc, thinking, run, config.timeoutMs);
           logOutcome(`thinking=${thinking} run=${run} ${doc.id}`, row);
           rows.push(row);

@@ -72,6 +72,8 @@ for (const scenario of ["correct", "mixed"] as const) {
       child.stderr!.on("data", chunk => output += chunk);
       const [code] = await once(child, "exit");
       assert.equal(code, scenario === "correct" ? 0 : 1, output);
+      assert.match(output, /Starting local Ollama evaluation; AWS is not contacted/);
+      assert.match(output, /Starting thinking=/);
       const report = JSON.parse(await readFile(outputPath, "utf8"));
       assert.deepEqual([...seenModes].sort(), [false, true]);
       assert.equal(report.results.length, 10);
