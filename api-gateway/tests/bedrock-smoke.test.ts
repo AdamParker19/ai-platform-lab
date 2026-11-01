@@ -38,13 +38,17 @@ test("live mode requires explicit flag, model identity and both reviewed prices"
 test("permission/transport failure produces partial evidence and stops, with unknown cost", async () => {
   const config = parseSmokeOptions(["--live", "--input-usd-per-million", "1", "--output-usd-per-million", "2"], { BEDROCK_MODEL_ID: "test" });
   let calls = 0;
-  const report = await runSmoke(config, async () => { calls++; const e = new Error("private-message"); e.name = "AccessDeniedException"; throw e; });
+  const progress: string[] = [];
+  const report = await runSmoke(config, async () => { calls++; const e = new Error("private-message"); e.name = "AccessDeniedException"; throw e; }, message => progress.push(message));
   assert.equal(calls, 1);
   assert.equal(report.summary.complete, false);
   assert.equal(report.rows[0]!.outcome, "access_denied");
   assert.equal(report.summary.estimatedCostUsd, null);
   assert.equal(report.summary.modelQuality?.exactMatchRate, null);
   assert.ok(!JSON.stringify(report).includes("private-message"));
+  assert.ok(progress.some(message => message.includes("Starting case 1/5")));
+  assert.ok(progress.some(message => message.includes("finished: access_denied")));
+  assert.ok(!progress.join(" ").includes("private-message"));
 });
 
 test("estimated cost uses observed usage and supplied rates; missing usage stays unknown", async () => {
@@ -74,6 +78,9 @@ test("CLI defaults to offline even with AWS/model settings, saves evidence and p
   try {
     const first = spawnSync(process.execPath, args, { env, encoding: "utf8" });
     assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stderr, /Runner started; validating configuration/);
+    assert.match(first.stderr, /Reserved report .* remains empty until the run finishes/);
+    assert.match(first.stderr, /Case 5\/5 finished/);
     const saved = readFileSync(output, "utf8");
     const report = JSON.parse(saved);
     assert.equal(report.mode, "offline");

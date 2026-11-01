@@ -53,7 +53,8 @@ export const offlineSender: ConverseSender = async command => {
     output: { message: { role: "assistant", content: [{ text: JSON.stringify(fixture.offlineResponse) }] } } };
 };
 
-export async function runSmoke(config: SmokeOptions, send?: ConverseSender) {
+export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onProgress?: (message: string) => void) {
+  const progress = (message: string) => { try { onProgress?.(message); } catch { /* Diagnostics must not change results. */ } };
   // A test can inject a sender; offline mode always injects one. No warm-up calls.
   const observations: BedrockTelemetry[] = [];
   const provider = new BedrockExtractionProvider({ modelId: config.modelId, region: config.region, promptVariant: config.promptVariant,
@@ -64,23 +65,27 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender) {
   const startedAt = new Date().toISOString();
   let codeRevision: string | null = null;
   let workingTreeDirty: boolean | null = null;
-  try { codeRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* source archive */ }
-  try { workingTreeDirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0; } catch { /* source archive */ }
-  for (const fixture of smokeCases) {
+  progress("Checking source revision (up to two seconds per Git command).");
+  try { codeRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, windowsHide: true }).trim(); } catch { /* unavailable or timed out */ }
+  try { workingTreeDirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, windowsHide: true }).trim().length > 0; } catch { /* unavailable or timed out */ }
+  for (const [index, fixture] of smokeCases.entries()) {
     const requestId = randomUUID();
     let result: Awaited<ReturnType<Extractor["extractWithGrounding"]>> | null = null;
     let errorCategory: string | null = null;
+    progress(`Starting case ${index + 1}/${smokeCases.length} (${fixture.id}); request ID ${requestId}.`);
+    const pending = setTimeout(() => progress(`Case ${index + 1} is still pending after 30 seconds; SDK cancellation may be pending. The remote outcome may be unknown; do not retry until investigating.`), 30000);
     try { result = await extractor.extractWithGrounding(fixture.document, { requestId }); }
     catch (error) {
       errorCategory = error instanceof BedrockExtractionError ? error.category
         : error instanceof ExtractionValidationError ? "invalid_response" : "provider_error";
-    }
+    } finally { clearTimeout(pending); }
     const telemetry = observations.find(o => o.requestId === requestId);
     rows.push({ caseId: fixture.id, requestId, expected: fixture.expected, actual: result?.extraction ?? null,
       grounding: result?.grounding ?? null, supplierVerified: result?.grounding.status === "verified",
       outcome: errorCategory ?? result!.grounding.status, errorCategory,
       exactMatch: result ? isDeepStrictEqual(result.extraction, fixture.expected) : false,
       telemetry: telemetry ?? null, estimatedCostUsd: config.live ? estimateCost(telemetry, config.inputPrice, config.outputPrice) : null });
+    progress(`Case ${index + 1}/${smokeCases.length} finished: ${rows.at(-1)!.outcome}.`);
     // Stop on transport/permission failures; never retry or fall back to another provider.
     if (errorCategory && errorCategory !== "invalid_response") break;
   }
@@ -106,14 +111,18 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender) {
 }
 
 async function main() {
+  const progress = (message: string) => console.error(`[bedrock-smoke] ${message}`);
+  progress("Runner started; validating configuration.");
   const config = parseSmokeOptions(process.argv.slice(2));
   await mkdir(dirname(config.output), { recursive: true });
   // Reserve the destination BEFORE any live call, rather than discovering a
   // collision after paying for inference and losing the resulting evidence.
   const file = await open(config.output, "wx");
+  progress(`Reserved report at ${config.output}; it remains empty until the run finishes.`);
   let report: Awaited<ReturnType<typeof runSmoke>>;
   try {
-    report = await runSmoke(config);
+    report = await runSmoke(config, undefined, progress);
+    progress("Writing report.");
     await file.writeFile(JSON.stringify(report, null, 2) + "\n");
   } finally { await file.close(); }
   console.log(JSON.stringify({ mode: report.mode, report: config.output, ...report.summary }, null, 2));

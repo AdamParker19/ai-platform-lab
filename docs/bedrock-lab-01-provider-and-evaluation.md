@@ -221,11 +221,24 @@ token-only estimate from observed usage, not a bill. A timeout with no returned
 usage has unknown cost, not zero cost.
 
 The runner makes at most five sequential SDK attempts, with 256 output tokens
-per call and a 30-second deadline. It stops early on permission, throttling or
+per call and a 30-second cancellation signal. The signal is not a hard deadline
+for npm startup or every credential-resolution operation. It stops early on permission, throttling or
 transport failures and saves the attempted rows. It does not retry or switch
 providers. Invalid model responses remain recorded and the run exits nonzero.
 Mismatches and review outcomes are valid validation outcomes, recorded separately
 from exact-match quality. Re-running the command starts another set of calls.
+
+The runner prints startup and per-case progress to stderr; the final summary is
+JSON on stdout. It reserves an empty report file before the first attempt and
+writes the report after the run completes. A zero-byte file alone does not prove
+whether Bedrock received a request. If a case remains pending after its deadline,
+do not start another run until investigating: cancellation or network failure
+does not establish the remote outcome or its cost.
+
+CloudWatch's model invocation table requires Bedrock model invocation logging,
+which is disabled by default. An empty table does not establish that no request
+was made. Logging can include input and output content, so review its settings,
+privacy and costs before enabling it.
 
 Reports include source revision, fixture hash, prompt hash, model identity,
 per-case validation, latency and token usage. A partial live run has no aggregate
@@ -264,6 +277,7 @@ RAG, vector databases, agents and managed training pipelines are later labs.
 - [Inference profiles and source-Region pricing](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html)
 - [Inference profile IAM prerequisites](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html)
 - [List inference profiles](https://docs.aws.amazon.com/cli/latest/reference/bedrock/list-inference-profiles.html)
+- [Bedrock model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html)
 - [Supported models and features](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference-supported-models-features.html)
 - [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
 - [MLA-C02 guide](https://docs.aws.amazon.com/aws-certification/latest/machine-learning-engineer-associate-02/machine-learning-engineer-associate-02.html)
