@@ -39,7 +39,7 @@ test("permission/transport failure produces partial evidence and stops, with unk
   const config = parseSmokeOptions(["--live", "--input-usd-per-million", "1", "--output-usd-per-million", "2"], { BEDROCK_MODEL_ID: "test" });
   let calls = 0;
   const progress: string[] = [];
-  const report = await runSmoke(config, async () => { calls++; const e = new Error("private-message"); e.name = "AccessDeniedException"; throw e; }, message => progress.push(message));
+  const report = await runSmoke(config, async () => { calls++; throw Object.assign(new Error("private-message"), { name: "AccessDeniedException", $metadata: { httpStatusCode: 403, requestId: "aws-123" } }); }, message => progress.push(message));
   assert.equal(calls, 1);
   assert.equal(report.summary.complete, false);
   assert.equal(report.rows[0]!.outcome, "access_denied");
@@ -48,6 +48,8 @@ test("permission/transport failure produces partial evidence and stops, with unk
   assert.ok(!JSON.stringify(report).includes("private-message"));
   assert.ok(progress.some(message => message.includes("Starting case 1/5")));
   assert.ok(progress.some(message => message.includes("finished: access_denied")));
+  assert.ok(progress.some(message => message.includes("name=AccessDeniedException code=unknown httpStatus=403 awsRequestId=aws-123")));
+  assert.equal(report.rows[0]!.telemetry?.failure?.httpStatus, 403);
   assert.ok(!progress.join(" ").includes("private-message"));
 });
 

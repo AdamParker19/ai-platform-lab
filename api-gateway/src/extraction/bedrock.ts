@@ -3,8 +3,9 @@ import { BedrockRuntimeClient, ConverseCommand, type ConverseCommandOutput } fro
 import type { ExtractionOptions, ExtractionProvider } from "./provider.js";
 import { parsePromptVariant, systemPrompt, type PromptVariant } from "./prompts.js";
 import { sha256, type Provenance } from "./provenance.js";
+import { describeFailure, type FailureDiagnostic } from "./diagnostics.js";
 
-export type BedrockErrorCategory = "timeout" | "access_denied" | "throttled" | "unavailable" | "invalid_response" | "provider_error";
+export type BedrockErrorCategory = "timeout" | "access_denied" | "throttled" | "unavailable" | "credentials_error" | "network_error" | "invalid_response" | "provider_error";
 export class BedrockExtractionError extends Error {
   constructor(public readonly category: BedrockErrorCategory) {
     super(`Bedrock extraction failed: ${category}`);
@@ -19,6 +20,7 @@ export type BedrockTelemetry = {
   clientLatencyMs: number; serviceLatencyMs: number | null;
   inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
   stopReason: string | null; outcome: "json_parsed" | "error"; errorCategory: BedrockErrorCategory | null;
+  failure: FailureDiagnostic | null;
 };
 // Treat wire telemetry defensively; absence is unknown, never invented as zero.
 export type ConverseReply = Pick<ConverseCommandOutput, "$metadata" | "output" | "stopReason"> & Partial<Pick<ConverseCommandOutput, "usage" | "metrics">>;
@@ -32,7 +34,11 @@ const count = (value: unknown) => typeof value === "number" && Number.isSafeInte
 function category(error: unknown, signal: AbortSignal): BedrockErrorCategory {
   if (signal.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) return "timeout";
   if (error instanceof BedrockExtractionError) return error.category;
-  const name = error instanceof Error ? error.name : "";
+  const diagnostic = describeFailure(error);
+  const name = diagnostic.name ?? "";
+  if (name === "CredentialsProviderError") return "credentials_error";
+  if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT"].includes(diagnostic.code ?? "")) return "timeout";
+  if (diagnostic.code) return "network_error";
   if (name === "AccessDeniedException") return "access_denied";
   if (name === "ThrottlingException") return "throttled";
   if (["ServiceUnavailableException", "ModelNotReadyException", "InternalServerException"].includes(name)) return "unavailable";
@@ -84,7 +90,7 @@ export class BedrockExtractionProvider implements ExtractionProvider {
       service: "bedrock-extraction", event: "model_call", provider: "bedrock", requestId, awsRequestId: null,
       model: this.modelId, region: this.region, promptVariant: this.promptVariant, promptSha256: sha256(this.prompt),
       maxOutputTokens: this.maxOutputTokens, clientLatencyMs: 0, serviceLatencyMs: null,
-      inputTokens: null, outputTokens: null, totalTokens: null, stopReason: null, outcome: "error", errorCategory: null,
+      inputTokens: null, outputTokens: null, totalTokens: null, stopReason: null, outcome: "error", errorCategory: null, failure: null,
     };
     try {
       if (signal.aborted) throw new BedrockExtractionError("timeout");
@@ -113,9 +119,10 @@ export class BedrockExtractionProvider implements ExtractionProvider {
       return result;
     } catch (error) {
       telemetry.errorCategory = category(error, signal);
+      telemetry.failure = describeFailure(error);
       if (error && typeof error === "object" && "$metadata" in error) {
         const metadata = error.$metadata as { requestId?: unknown } | undefined;
-        if (typeof metadata?.requestId === "string") telemetry.awsRequestId = metadata.requestId;
+        if (typeof metadata?.requestId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(metadata.requestId)) telemetry.awsRequestId = metadata.requestId;
       }
       // Do not expose SDK messages or model text that might contain document content.
       throw new BedrockExtractionError(telemetry.errorCategory);

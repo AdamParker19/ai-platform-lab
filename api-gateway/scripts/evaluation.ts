@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { extractionSchema, type ExtractionResult } from "../src/extraction/schema.js";
+import type { FailureDiagnostic } from "../src/extraction/diagnostics.js";
 
 export type Outcome = "correct" | "incorrect" | "timeout" | "provider_error" | "invalid_response";
 export type EvaluationRow = {
@@ -14,6 +15,7 @@ export type EvaluationRow = {
   requestId: string | null;
   expected: ExtractionResult;
   actual: unknown;
+  diagnostic?: FailureDiagnostic & { source: "gateway" | "provider" };
 };
 
 export function sameExtraction(actual: ExtractionResult, expected: ExtractionResult): boolean {

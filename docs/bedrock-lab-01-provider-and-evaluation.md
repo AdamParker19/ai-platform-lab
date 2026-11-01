@@ -235,6 +235,14 @@ whether Bedrock received a request. If a case remains pending after its deadline
 do not start another run until investigating: cancellation or network failure
 does not establish the remote outcome or its cost.
 
+For completed failures, progress and report telemetry show the category and,
+when available, an allowlisted error name, network code, HTTP status, and AWS
+request ID. Unknown details stay `unknown`/`null`; raw provider messages,
+documents, credentials and response bodies are not logged. `verify:bedrock`
+uses Bedrock; `verify:live` / `scripts/verify-live.ts` is the separate Ollama
+evaluation. Both report safe diagnostics, but neither can log if npm or Node
+does not start the script.
+
 CloudWatch's model invocation table requires Bedrock model invocation logging,
 which is disabled by default. An empty table does not establish that no request
 was made. Logging can include input and output content, so review its settings,

@@ -90,7 +90,8 @@ export class OllamaExtractionProvider implements ExtractionProvider {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error(`Ollama request failed with HTTP ${response.status}: ${errorText}`);
+      const error = new Error(`Ollama request failed with HTTP ${response.status}: ${errorText}`);
+      throw Object.assign(error, { statusCode: response.status });
     }
 
     const payload = (await response.json()) as {

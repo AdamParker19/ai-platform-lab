@@ -85,7 +85,10 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
       outcome: errorCategory ?? result!.grounding.status, errorCategory,
       exactMatch: result ? isDeepStrictEqual(result.extraction, fixture.expected) : false,
       telemetry: telemetry ?? null, estimatedCostUsd: config.live ? estimateCost(telemetry, config.inputPrice, config.outputPrice) : null });
-    progress(`Case ${index + 1}/${smokeCases.length} finished: ${rows.at(-1)!.outcome}.`);
+    const failure = telemetry?.failure;
+    const details = errorCategory && failure
+      ? ` name=${failure.name ?? "unknown"} code=${failure.code ?? "unknown"} httpStatus=${failure.httpStatus ?? "unknown"} awsRequestId=${telemetry?.awsRequestId ?? "unknown"}` : "";
+    progress(`Case ${index + 1}/${smokeCases.length} finished: ${rows.at(-1)!.outcome}.${details}`);
     // Stop on transport/permission failures; never retry or fall back to another provider.
     if (errorCategory && errorCategory !== "invalid_response") break;
   }

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createApp } from "../src/app.js";
-import { OllamaExtractionProvider } from "../src/extraction/provider.js";
+import { OllamaExtractionProvider, type ExtractionProvider } from "../src/extraction/provider.js";
+import { describeFailure, type FailureDiagnostic } from "../src/extraction/diagnostics.js";
 import { parsePromptVariant, systemPrompt } from "../src/extraction/prompts.js";
 import { compareReports, parseExperimentReport, baselinePlanProblems } from "./comparison.js";
 import { extractionSchema } from "../src/extraction/schema.js";
@@ -71,18 +72,22 @@ async function attempt(url: string, doc: Awaited<ReturnType<typeof loadDataset>>
     });
     row.httpStatus = response.status;
     row.requestId = response.headers.get("x-request-id");
-    const body: unknown = await response.json();
+    let body: unknown = null;
+    let validJson = true;
+    try { body = await response.json(); } catch { validJson = false; }
     if (response.status === 504) row.outcome = "timeout";
     else if (response.status !== 200) {
       row.outcome = response.status === 502 && body && typeof body === "object" &&
         "error" in body && body.error === "Invalid model response" ? "invalid_response" : "provider_error";
-    } else {
+    } else if (!validJson) row.outcome = "invalid_response";
+    else {
       row.actual = body;
       const parsed = extractionSchema.safeParse(body);
       row.outcome = !parsed.success ? "invalid_response" : sameExtraction(parsed.data, doc.expected) ? "correct" : "incorrect";
     }
-  } catch {
+  } catch (error) {
     row.outcome = signal.aborted ? "timeout" : row.httpStatus === 200 ? "invalid_response" : "provider_error";
+    row.diagnostic = { source: "gateway", ...describeFailure(error) };
   }
   row.latencyMs = Math.round(performance.now() - start);
   return row;
@@ -127,24 +132,38 @@ async function main() {
   for (const thinking of config.modes) {
     const provider = new OllamaExtractionProvider({ baseUrl, model, think: thinking, temperature: config.temperature, seed: config.seed, promptVariant: config.promptVariant });
     const before = await provider.describe();
-    const server = createApp({ inferenceUrl: "http://127.0.0.1:9999", timeoutMs: 1000, extractionProvider: provider, llmTimeoutMs: config.timeoutMs }).listen(0, "127.0.0.1");
+    const failures = new Map<string, FailureDiagnostic>();
+    const observed: ExtractionProvider = { extract: async (document, options) => {
+      try { return await provider.extract(document, options); }
+      catch (error) {
+        if (options?.requestId) failures.set(options.requestId, describeFailure(error));
+        throw error;
+      }
+    } };
+    const server = createApp({ inferenceUrl: "http://127.0.0.1:9999", timeoutMs: 1000, extractionProvider: observed, llmTimeoutMs: config.timeoutMs }).listen(0, "127.0.0.1");
     try {
       if (!server.listening) await once(server, "listening");
       const addr = server.address();
       if (!addr || typeof addr === "string") throw new Error("Gateway failed to start");
       const url = `http://127.0.0.1:${addr.port}`;
+      const logOutcome = (prefix: string, row: EvaluationRow) => {
+        const failure = row.requestId ? failures.get(row.requestId) : undefined;
+        if (failure) { row.diagnostic = { source: "provider", ...failure }; failures.delete(row.requestId!); }
+        const detail = row.diagnostic ? ` source=${row.diagnostic.source} name=${row.diagnostic.name ?? "unknown"} code=${row.diagnostic.code ?? "unknown"} upstreamHttpStatus=${row.diagnostic.httpStatus ?? "unknown"}` : "";
+        console.log(`${prefix}: ${row.outcome} (${row.latencyMs}ms) httpStatus=${row.httpStatus ?? "unknown"} requestId=${row.requestId ?? "unknown"}${detail}`);
+      };
       for (let run = 1; run <= config.warmup; run++) {
         const row = await attempt(url, documents[0]!, thinking, run, config.timeoutMs);
+        logOutcome(`Warm-up thinking=${thinking}, excluded from measured summary`, row);
         warmupRows.push(row);
-        console.log(`Warm-up thinking=${thinking}: ${row.outcome} (${row.latencyMs}ms), excluded from measured summary`);
       }
       // Rotate document order between rounds to reduce fixed-position effects.
       for (let run = 1; run <= config.runs; run++) {
         for (let offset = 0; offset < documents.length; offset++) {
           const doc = documents[(offset + run - 1) % documents.length]!;
           const row = await attempt(url, doc, thinking, run, config.timeoutMs);
+          logOutcome(`thinking=${thinking} run=${run} ${doc.id}`, row);
           rows.push(row);
-          console.log(`thinking=${thinking} run=${run} ${doc.id}: ${row.outcome} (${row.latencyMs}ms)`);
         }
       }
     } finally { await close(server); }

@@ -72,7 +72,7 @@ test("malformed JSON, truncation, filtering and tool requests are rejected witho
 
 test("SDK failure categories are sanitized, never retried, and unknown usage is not zero", async () => {
   for (const [name, expected] of [["AccessDeniedException", "access_denied"], ["ThrottlingException", "throttled"],
-    ["ModelNotReadyException", "unavailable"], ["CredentialsProviderError", "provider_error"]] as const) {
+    ["ModelNotReadyException", "unavailable"], ["CredentialsProviderError", "credentials_error"]] as const) {
     let calls = 0;
     const events: BedrockTelemetry[] = [];
     const p = provider(async () => { calls++; const e = new Error("PRIVATE-SDK-MESSAGE"); e.name = name; throw e; }, e => events.push(e));
@@ -82,6 +82,34 @@ test("SDK failure categories are sanitized, never retried, and unknown usage is 
     assert.equal(events[0]!.outputTokens, null);
     assert.equal(events[0]!.errorCategory, expected);
   }
+});
+
+test("network, authentication and timeout diagnostics expose only safe details", async () => {
+  const cases = [
+    { causeCode: "ENOTFOUND", category: "network_error" },
+    { causeCode: "ECONNREFUSED", category: "network_error" },
+    { causeCode: "ETIMEDOUT", category: "timeout" },
+    { causeCode: "SECRET-RAW-CODE", category: "provider_error" },
+  ] as const;
+  for (const item of cases) {
+    const events: BedrockTelemetry[] = [];
+    const p = provider(async () => {
+      const inner = Object.assign(new Error("SECRET INNER"), { code: item.causeCode });
+      throw new Error("SECRET OUTER", { cause: inner });
+    }, e => events.push(e));
+    await assert.rejects(p.extract("PRIVATE DOCUMENT"), (error: unknown) => error instanceof BedrockExtractionError && error.category === item.category);
+    assert.equal(events[0]!.failure?.code, item.causeCode === "SECRET-RAW-CODE" ? null : item.causeCode);
+    assert.ok(!JSON.stringify(events).includes("SECRET"));
+    assert.ok(!JSON.stringify(events).includes("PRIVATE DOCUMENT"));
+  }
+  const events: BedrockTelemetry[] = [];
+  const p = provider(async () => {
+    throw Object.assign(new Error("PRIVATE AWS RESPONSE"), { name: "AccessDeniedException", $metadata: { httpStatusCode: 403, requestId: "aws-123" } });
+  }, event => events.push(event));
+  await assert.rejects(p.extract("Supplier: Atlas"), (error: unknown) => error instanceof BedrockExtractionError && error.category === "access_denied");
+  assert.deepEqual(events[0]!.failure, { name: "AccessDeniedException", code: null, httpStatus: 403 });
+  assert.equal(events[0]!.awsRequestId, "aws-123");
+  assert.ok(!JSON.stringify(events).includes("PRIVATE AWS RESPONSE"));
 });
 
 test("pre-aborted calls never invoke the SDK", async () => {
