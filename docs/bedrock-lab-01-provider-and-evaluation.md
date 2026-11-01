@@ -92,8 +92,32 @@ keeps `modelDigest: null` and `digestStatus: unavailable`.
 
 ## 3. Prepare the AWS identity and select a model
 
-Use an existing scoped project profile. The commands below use the project's
+Use an existing scoped project identity. The commands below use the local
 `ai-platform-lab` profile; use its actual configured name if yours differs.
+A local CLI profile is a credentials/configuration selection, separate from a
+Bedrock inference profile, which selects model routing.
+
+If `get-caller-identity` fails with `NoCredentials`, local authentication is not
+configured. Browser or CloudShell sign-in alone does not configure PowerShell.
+Use browser-based CLI login with temporary credentials (AWS CLI v2.32.0 or newer):
+
+1. In the AWS Console, open **IAM > Users > your project IAM user > Add
+   permissions > Attach policies directly** and attach the AWS-managed
+   `SignInLocalDevelopmentAccess` policy. An administrator can perform this if
+   your project user cannot edit IAM. This enables CLI login; it does not grant
+   Bedrock invocation access.
+2. Run the following in Windows PowerShell and choose that project IAM user in
+   account `501683248889` when the browser opens. Do not select the root session.
+   `aws login` can create the named local profile if it does not exist:
+
+```powershell
+aws login --profile ai-platform-lab --region ap-south-1
+```
+
+After login succeeds, select the same profile for the CLI and the Node process.
+The repository's pinned JavaScript SDK supports the login credentials provider;
+no access keys or provider code change are needed. If you use IAM Identity
+Center instead, use its `aws configure sso` / `aws sso login` flow.
 
 ```powershell
 $env:AWS_PROFILE = "ai-platform-lab"
@@ -234,6 +258,8 @@ RAG, vector databases, agents and managed training pipelines are later labs.
 
 - [Converse API, permissions, usage and metrics](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
 - [SDK default credential chain](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html)
+- [Browser-based CLI login with temporary credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html)
+- [Login credentials provider support](https://docs.aws.amazon.com/sdkref/latest/guide/feature-login-credentials.html)
 - [Bedrock IAM examples](https://docs.aws.amazon.com/bedrock/latest/userguide/security_iam_id-based-policy-examples.html)
 - [Inference profiles and source-Region pricing](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html)
 - [Inference profile IAM prerequisites](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-prereq.html)
