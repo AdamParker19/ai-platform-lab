@@ -114,7 +114,13 @@ export function createApp(config: GatewayConfig) {
         else fail(502, "UPSTREAM_FAILURE", "Generation service failed");
         return;
       }
-      const output: unknown = await upstream.json();
+      let output: unknown;
+      try {
+        output = await upstream.json();
+      } catch {
+        fail(502, "INVALID_UPSTREAM_RESPONSE", "Invalid generation response");
+        return;
+      }
       if (!validGeneration(output, requestId)) {
         fail(502, "INVALID_UPSTREAM_RESPONSE", "Invalid generation response");
         return;
