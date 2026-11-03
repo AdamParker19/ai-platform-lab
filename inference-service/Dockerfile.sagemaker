@@ -22,7 +22,7 @@ COPY --from=training /trained/evaluation.json /evaluation.json
 # AWS's custom-inference contract expects root; ECS uses its separate Dockerfile.
 FROM base AS runtime
 ENV MODEL_DIR=/opt/ml/model
-COPY app.py model.py serve.py ./
+COPY app.py model.py genai.py serve.py ./
 EXPOSE 8080
 ENTRYPOINT ["python", "serve.py"]
 CMD ["serve"]
