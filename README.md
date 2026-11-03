@@ -5,11 +5,13 @@ A hands-on backend-to-MLOps learning project: a TypeScript API gateway calling a
 ## What's here
 
 - `inference-service/`: FastAPI, `/health`, `/predict`, a versioned scikit-learn sentiment artifact loaded once at startup.
-- `api-gateway/`: Express + TypeScript, `/health`, `/api/analyze`, validation, a configurable inference deadline and graceful shutdown.
+- `api-gateway/`: Express + TypeScript, `/health`, `/api/analyze`, `/api/generate`, validation, a configurable inference deadline and graceful shutdown.
 - Both services emit JSON request logs with latency and a shared request ID. Input text is not logged.
 - Prediction responses include `prediction`, `confidence` and `modelVersion`.
 
 The classifier is trained offline on the free UCI Amazon sentiment subset. Startup loads the saved pipeline, verifies its checksum and dependency versions, and never trains. Its probabilities are **not calibrated confidence**, and small-dataset results are not a production quality claim.
+
+Try [Week 1: mockable GenAI endpoint](docs/challenge-01-genai-mock-provider.md) to add an offline generation API with an injectable Python provider, correlated request IDs, safe error handling, and tests, without changing sentiment or contacting AWS.
 
 Start with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
 

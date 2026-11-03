@@ -25,6 +25,16 @@ function validPrediction(value: unknown): boolean {
     typeof v.modelVersion === "string" && v.modelVersion.length > 0;
 }
 
+function validGeneration(value: unknown, requestId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return Object.keys(v).sort().join(",") === "latencyMs,modelVersion,requestId,text" &&
+    typeof v.text === "string" && v.text.trim().length > 0 && v.text.length <= 20000 &&
+    typeof v.modelVersion === "string" && v.modelVersion.trim().length > 0 &&
+    v.requestId === requestId &&
+    typeof v.latencyMs === "number" && Number.isFinite(v.latencyMs) && v.latencyMs >= 0;
+}
+
 export function createApp(config: GatewayConfig) {
   const app = express();
   const llmTimeoutMs = config.llmTimeoutMs ?? 30000;
@@ -77,6 +87,51 @@ export function createApp(config: GatewayConfig) {
       });
     }
   });
+  app.post("/api/generate", async (req, res) => {
+    const requestId: string = res.locals.requestId;
+    const fail = (status: number, code: string, message: string) =>
+      res.status(status).json({ error: { code, message }, requestId });
+    const body: unknown = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).length !== 1 || !("prompt" in body) ||
+        typeof body.prompt !== "string" || !body.prompt.trim() ||
+        [...body.prompt.trim()].length > 2000) {
+      fail(400, "INVALID_PROMPT", "prompt must contain 1–2000 characters; no extra fields allowed");
+      return;
+    }
+
+    const signal = AbortSignal.timeout(config.timeoutMs);
+    try {
+      const upstream = await fetch(new URL("/generate", config.inferenceUrl), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-request-id": requestId },
+        body: JSON.stringify({ prompt: body.prompt.trim() }),
+        signal,
+      });
+      if (!upstream.ok) {
+        await upstream.body?.cancel();
+        if (upstream.status === 504) fail(504, "PROVIDER_TIMEOUT", "Generation timed out");
+        else fail(502, "UPSTREAM_FAILURE", "Generation service failed");
+        return;
+      }
+      let output: unknown;
+      try {
+        output = await upstream.json();
+      } catch {
+        fail(502, "INVALID_UPSTREAM_RESPONSE", "Invalid generation response");
+        return;
+      }
+      if (!validGeneration(output, requestId)) {
+        fail(502, "INVALID_UPSTREAM_RESPONSE", "Invalid generation response");
+        return;
+      }
+      res.json(output);
+    } catch {
+      if (signal.aborted) fail(504, "GATEWAY_TIMEOUT", "Generation service timed out");
+      else fail(502, "UPSTREAM_UNAVAILABLE", "Generation service unavailable");
+    }
+  });
+
   app.post("/api/extraction-jobs", (req, res) => {
     if (!config.jobStore) { res.status(503).json({ error: "Background jobs disabled" }); return; }
     const key = req.get("Idempotency-Key");
@@ -150,9 +205,17 @@ export function createApp(config: GatewayConfig) {
       res.status(502).json({ error: "Extraction service unavailable" });
     }
   });
-  const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+  const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     const status = error.type === "entity.too.large" ? 413 : error.type === "entity.parse.failed" ? 400 : 500;
-    res.status(status).json({ error: status === 413 ? "Request too large" : status === 400 ? "Invalid JSON" : "Internal server error" });
+    const message = status === 413 ? "Request too large" : status === 400 ? "Invalid JSON" : "Internal server error";
+    if (req.path === "/api/generate") {
+      res.status(status).json({
+        error: { code: status === 413 ? "REQUEST_TOO_LARGE" : status === 400 ? "INVALID_JSON" : "INTERNAL_ERROR", message },
+        requestId: res.locals.requestId,
+      });
+      return;
+    }
+    res.status(status).json({ error: message });
   };
   app.use(errorHandler);
   return app;
