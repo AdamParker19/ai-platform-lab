@@ -11,7 +11,9 @@ A hands-on backend-to-MLOps learning project: a TypeScript API gateway calling a
 
 The classifier is trained offline on the free UCI Amazon sentiment subset. Startup loads the saved pipeline, verifies its checksum and dependency versions, and never trains. Its probabilities are **not calibrated confidence**, and small-dataset results are not a production quality claim.
 
-Try [Week 1: mockable GenAI endpoint](docs/challenge-01-genai-mock-provider.md) to add an offline generation API with an injectable Python provider, correlated request IDs, safe error handling, and tests, without changing sentiment or contacting AWS.\n\nStart with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
+Try [Week 1: mockable GenAI endpoint](docs/challenge-01-genai-mock-provider.md) to add an offline generation API with an injectable Python provider, correlated request IDs, safe error handling, and tests, without changing sentiment or contacting AWS.
+
+Start with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
 
 ## Run locally
 
