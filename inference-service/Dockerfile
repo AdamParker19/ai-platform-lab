@@ -15,7 +15,7 @@ RUN python train.py --output /trained --version "$MODEL_VERSION"
 
 FROM base AS runtime
 RUN useradd --create-home appuser
-COPY app.py model.py ./
+COPY app.py model.py genai.py ./
 COPY --from=training --chown=appuser:appuser /trained/ ./artifacts/
 USER appuser
 EXPOSE 8000
