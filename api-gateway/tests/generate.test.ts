@@ -16,7 +16,7 @@ async function close(server: Server): Promise<void> {
 }
 
 test("POST /api/generate proxies a safe, mockable contract", async t => {
-  let mode: "success" | "invalid" | "failure" | "timeout" | "upstream504" = "success";
+  let mode: "success" | "invalid" | "malformed" | "failure" | "timeout" | "upstream504" = "success";
   let forwardedId = "";
   const upstream = createServer((req, res) => {
     forwardedId = String(req.headers["x-request-id"] ?? "");
@@ -24,6 +24,7 @@ test("POST /api/generate proxies a safe, mockable contract", async t => {
     if (mode === "failure") { res.writeHead(503).end(); return; }
     if (mode === "upstream504") { res.writeHead(504).end(); return; }
     res.setHeader("content-type", "application/json");
+    if (mode === "malformed") { res.end("{oops"); return; }
     res.end(JSON.stringify(mode === "invalid"
       ? { text: "", modelVersion: "mock-genai-v1", requestId: forwardedId, latencyMs: 1 }
       : { text: "[MOCK] Received: Explain RAG", modelVersion: "mock-genai-v1", requestId: forwardedId, latencyMs: 1.25 }));
@@ -65,6 +66,10 @@ test("POST /api/generate proxies a safe, mockable contract", async t => {
     await t.test("invalid upstream responses return 502", async () => {
       mode = "invalid";
       assert.equal((await post('{"prompt":"hello"}')).status, 502);
+      mode = "malformed";
+      const malformed = await post('{"prompt":"hello"}');
+      assert.equal(malformed.status, 502);
+      assert.equal((await malformed.json() as { error: { code: string } }).error.code, "INVALID_UPSTREAM_RESPONSE");
     });
     await t.test("upstream HTTP 504 remains a timeout", async () => {
       mode = "upstream504";
