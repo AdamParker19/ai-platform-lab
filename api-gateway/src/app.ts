@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 
 import { Extractor, ExtractionValidationError } from "./extraction/extractor.js";
 import { OllamaExtractionProvider, type ExtractionProvider } from "./extraction/provider.js";
+import { withDeadline } from "./extraction/deadline.js";
 
 import { JobStore, JobConflict, JobCapacity } from "./jobs/store.js";
 
@@ -133,12 +134,11 @@ export function createApp(config: GatewayConfig) {
       return;
     }
 
-    const signal = AbortSignal.timeout(llmTimeoutMs);
     try {
-      const extraction = await extractor.extract(trimmedDocument, { signal, requestId: res.locals.requestId });
+      const extraction = await withDeadline(signal => extractor.extract(trimmedDocument, { signal, requestId: res.locals.requestId }), llmTimeoutMs);
       res.json(extraction);
     } catch (error: unknown) {
-      const isAborted = signal.aborted || (error instanceof Error && error.name === "AbortError");
+      const isAborted = error instanceof Error && error.name === "AbortError";
       if (isAborted) {
         res.status(504).json({ error: "LLM extraction timed out" });
         return;

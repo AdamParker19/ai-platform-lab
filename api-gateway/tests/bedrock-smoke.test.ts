@@ -18,6 +18,7 @@ test("offline smoke exercises five cases with no model quality or fabricated usa
   assert.equal(report.summary.supplierVerifiedCases, 1);
   assert.equal(new Set(report.rows.map(r => r.requestId)).size, 5);
   assert.ok(report.rows.every(r => r.telemetry?.inputTokens === null));
+  assert.ok(report.rows.every(r => r.lifecycle.map(e => e.stage).join(",") === "starting,request_started,response_received,completed"));
   assert.match(report.dataset.sha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(report.configuration, { plannedCalls: 5, maxAttemptsPerCall: 1, maxOutputTokens: 256, timeoutMs: 30000, warmupCalls: 0 });
 });
@@ -42,14 +43,15 @@ test("permission/transport failure produces partial evidence and stops, with unk
   const report = await runSmoke(config, async () => { calls++; throw Object.assign(new Error("private-message"), { name: "AccessDeniedException", $metadata: { httpStatusCode: 403, requestId: "aws-123" } }); }, message => progress.push(message));
   assert.equal(calls, 1);
   assert.equal(report.summary.complete, false);
-  assert.equal(report.rows[0]!.outcome, "access_denied");
+  assert.equal(report.rows[0]!.outcome, "authorization_error");
   assert.equal(report.summary.estimatedCostUsd, null);
   assert.equal(report.summary.modelQuality?.exactMatchRate, null);
   assert.ok(!JSON.stringify(report).includes("private-message"));
   assert.ok(progress.some(message => message.includes("Starting case 1/5")));
-  assert.ok(progress.some(message => message.includes("finished: access_denied")));
+  assert.ok(progress.some(message => message.includes("finished: authorization_error")));
   assert.ok(progress.some(message => message.includes("name=AccessDeniedException code=unknown httpStatus=403 awsRequestId=aws-123")));
   assert.equal(report.rows[0]!.telemetry?.failure?.httpStatus, 403);
+  assert.equal(report.rows[0]!.lifecycle.at(-1)?.errorCategory, "authorization_error");
   assert.ok(!progress.join(" ").includes("private-message"));
 });
 
@@ -88,6 +90,7 @@ test("CLI defaults to offline even with AWS/model settings, saves evidence and p
     assert.equal(report.mode, "offline");
     assert.equal(report.summary.modelQuality, null);
     assert.equal(report.rows.length, 5);
+    assert.equal(report.rows[0].lifecycle.at(-1).stage, "completed");
     assert.equal(typeof report.workingTreeDirty, "boolean");
     const second = spawnSync(process.execPath, args, { env, encoding: "utf8" });
     assert.equal(second.status, 1);

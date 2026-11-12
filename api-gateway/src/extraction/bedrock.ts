@@ -4,8 +4,9 @@ import type { ExtractionOptions, ExtractionProvider } from "./provider.js";
 import { parsePromptVariant, systemPrompt, type PromptVariant } from "./prompts.js";
 import { sha256, type Provenance } from "./provenance.js";
 import { describeFailure, type FailureDiagnostic } from "./diagnostics.js";
+import { withDeadline } from "./deadline.js";
 
-export type BedrockErrorCategory = "timeout" | "access_denied" | "throttled" | "unavailable" | "credentials_error" | "network_error" | "invalid_response" | "provider_error";
+export type BedrockErrorCategory = "timeout" | "authorization_error" | "throttled" | "unavailable" | "credentials_error" | "network_error" | "invalid_response" | "provider_error";
 export class BedrockExtractionError extends Error {
   constructor(public readonly category: BedrockErrorCategory) {
     super(`Bedrock extraction failed: ${category}`);
@@ -25,22 +26,31 @@ export type BedrockTelemetry = {
 // Treat wire telemetry defensively; absence is unknown, never invented as zero.
 export type ConverseReply = Pick<ConverseCommandOutput, "$metadata" | "output" | "stopReason"> & Partial<Pick<ConverseCommandOutput, "usage" | "metrics">>;
 export type ConverseSender = (command: ConverseCommand, options: { abortSignal: AbortSignal }) => Promise<ConverseReply>;
+export type RequestStage = "starting" | "credentials_resolved" | "request_started" | "response_received" | "completed" | "failed";
+export type RequestEvent = {
+  service: "bedrock-extraction"; event: "request_lifecycle";
+  requestId: string; stage: RequestStage; elapsedMs: number; timestamp: string;
+  awsRequestId: string | null; errorCategory: BedrockErrorCategory | null;
+  failure: FailureDiagnostic | null;
+};
 export type BedrockProviderOptions = {
   modelId: string; region: string; maxOutputTokens?: number; timeoutMs?: number;
   promptVariant?: PromptVariant; send?: ConverseSender; onTelemetry?: (event: BedrockTelemetry) => void;
+  onLifecycle?: (event: RequestEvent) => void;
+  resolveCredentials?: (signal: AbortSignal) => Promise<void>;
 };
 
 const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-function category(error: unknown, signal: AbortSignal): BedrockErrorCategory {
-  if (signal.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) return "timeout";
+function category(error: unknown, signal?: AbortSignal): BedrockErrorCategory {
+  if (signal?.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) return "timeout";
   if (error instanceof BedrockExtractionError) return error.category;
   const diagnostic = describeFailure(error);
   const name = diagnostic.name ?? "";
-  if (name === "CredentialsProviderError") return "credentials_error";
+  if (["CredentialsProviderError", "UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException"].includes(name) || diagnostic.httpStatus === 401) return "credentials_error";
+  if (name === "AccessDeniedException" || diagnostic.httpStatus === 403) return "authorization_error";
+  if (name === "ThrottlingException" || diagnostic.httpStatus === 429) return "throttled";
   if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT"].includes(diagnostic.code ?? "")) return "timeout";
   if (diagnostic.code) return "network_error";
-  if (name === "AccessDeniedException") return "access_denied";
-  if (name === "ThrottlingException") return "throttled";
   if (["ServiceUnavailableException", "ModelNotReadyException", "InternalServerException"].includes(name)) return "unavailable";
   return "provider_error";
 }
@@ -54,6 +64,8 @@ export class BedrockExtractionProvider implements ExtractionProvider {
   private readonly prompt: string;
   private readonly send: ConverseSender;
   private readonly onTelemetry: (event: BedrockTelemetry) => void;
+  private readonly onLifecycle: (event: RequestEvent) => void;
+  private readonly resolveCredentials?: (signal: AbortSignal) => Promise<void>;
 
   constructor(options: BedrockProviderOptions) {
     this.modelId = options.modelId.trim();
@@ -66,13 +78,19 @@ export class BedrockExtractionProvider implements ExtractionProvider {
     if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 120000) throw new Error("Invalid Bedrock timeoutMs");
     this.promptVariant = parsePromptVariant(options.promptVariant ?? "evidence-v2");
     this.prompt = systemPrompt(this.promptVariant);
-    if (options.send) this.send = options.send;
+    if (options.send) {
+      this.send = options.send;
+      this.resolveCredentials = options.resolveCredentials;
+    }
     else {
       // Default credential chain; no embedded keys, endpoint override, or SDK retries.
-      const client = new BedrockRuntimeClient({ region: this.region, maxAttempts: 1 });
+      const client = new BedrockRuntimeClient({ region: this.region, maxAttempts: 1,
+        requestHandler: { connectionTimeout: Math.min(5000, this.timeoutMs), requestTimeout: this.timeoutMs } });
+      this.resolveCredentials = async () => { await client.config.credentials(); };
       this.send = (command, requestOptions) => client.send(command, requestOptions);
     }
     this.onTelemetry = options.onTelemetry ?? (event => console.log(JSON.stringify(event)));
+    this.onLifecycle = options.onLifecycle ?? (event => console.error(JSON.stringify(event)));
   }
 
   metadata(): Provenance {
@@ -82,8 +100,6 @@ export class BedrockExtractionProvider implements ExtractionProvider {
   }
 
   async extract(document: string, options: ExtractionOptions = {}): Promise<unknown> {
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs);
     const requestId = options.requestId && /^[A-Za-z0-9_-]{1,128}$/.test(options.requestId) ? options.requestId : randomUUID();
     const start = performance.now();
     const telemetry: BedrockTelemetry = {
@@ -92,38 +108,60 @@ export class BedrockExtractionProvider implements ExtractionProvider {
       maxOutputTokens: this.maxOutputTokens, clientLatencyMs: 0, serviceLatencyMs: null,
       inputTokens: null, outputTokens: null, totalTokens: null, stopReason: null, outcome: "error", errorCategory: null, failure: null,
     };
+    const emit = (stage: RequestStage) => {
+      try {
+        this.onLifecycle({ service: "bedrock-extraction", event: "request_lifecycle", requestId,
+          stage, elapsedMs: Math.round((performance.now() - start) * 100) / 100,
+          timestamp: new Date().toISOString(), awsRequestId: telemetry.awsRequestId,
+          errorCategory: telemetry.errorCategory, failure: telemetry.failure });
+      } catch { /* Logging must not change the extraction outcome. */ }
+    };
+    emit("starting");
     try {
-      if (signal.aborted) throw new BedrockExtractionError("timeout");
       if (!document.trim() || document.length > 10000) throw new BedrockExtractionError("invalid_response");
-      const response = await this.send(new ConverseCommand({
-        modelId: this.modelId,
-        system: [{ text: this.prompt }],
-        messages: [{ role: "user", content: [{ text: `<document>\n${document}\n</document>` }] }],
-        inferenceConfig: { maxTokens: this.maxOutputTokens },
-        requestMetadata: { requestId, promptVariant: this.promptVariant },
-      }), { abortSignal: signal });
-      telemetry.awsRequestId = response.$metadata.requestId ?? null;
+      const response = await withDeadline(async signal => {
+        if (this.resolveCredentials) {
+          await this.resolveCredentials(signal);
+          signal.throwIfAborted();
+          emit("credentials_resolved");
+        }
+        signal.throwIfAborted();
+        emit("request_started");
+        const reply = await this.send(new ConverseCommand({
+          modelId: this.modelId,
+          system: [{ text: this.prompt }],
+          messages: [{ role: "user", content: [{ text: `<document>\n${document}\n</document>` }] }],
+          inferenceConfig: { maxTokens: this.maxOutputTokens },
+          requestMetadata: { requestId, promptVariant: this.promptVariant },
+        }), { abortSignal: signal });
+        signal.throwIfAborted();
+        return reply;
+      }, this.timeoutMs, options.signal);
+      const awsId = response.$metadata.requestId;
+      telemetry.awsRequestId = typeof awsId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(awsId) ? awsId : null;
+      emit("response_received");
       telemetry.inputTokens = count(response.usage?.inputTokens);
       telemetry.outputTokens = count(response.usage?.outputTokens);
       telemetry.totalTokens = count(response.usage?.totalTokens);
       const serviceLatency = response.metrics?.latencyMs;
       telemetry.serviceLatencyMs = typeof serviceLatency === "number" && Number.isFinite(serviceLatency) && serviceLatency >= 0 ? serviceLatency : null;
       telemetry.stopReason = response.stopReason ?? null;
-      if (signal.aborted) throw new BedrockExtractionError("timeout");
       // Truncation, blocked content and tool requests are not completed extractions.
       if (response.stopReason !== "end_turn") throw new BedrockExtractionError("invalid_response");
       const text = response.output?.message?.content?.flatMap(block => typeof block.text === "string" ? [block.text] : []).join("") ?? "";
       let result: unknown;
       try { result = JSON.parse(text); } catch { throw new BedrockExtractionError("invalid_response"); }
       telemetry.outcome = "json_parsed"; // Schema and grounding are separate downstream decisions.
+      emit("completed");
       return result;
     } catch (error) {
-      telemetry.errorCategory = category(error, signal);
+      telemetry.errorCategory = category(error, options.signal);
       telemetry.failure = describeFailure(error);
       if (error && typeof error === "object" && "$metadata" in error) {
         const metadata = error.$metadata as { requestId?: unknown } | undefined;
         if (typeof metadata?.requestId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(metadata.requestId)) telemetry.awsRequestId = metadata.requestId;
       }
+      emit("failed");
       // Do not expose SDK messages or model text that might contain document content.
       throw new BedrockExtractionError(telemetry.errorCategory);
     } finally {

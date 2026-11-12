@@ -14,7 +14,7 @@ function response(text = JSON.stringify(result), stopReason: ConverseCommandOutp
 }
 const quiet = () => {};
 function provider(send: ConverseSender, onTelemetry: (event: BedrockTelemetry) => void = quiet) {
-  return new BedrockExtractionProvider({ modelId: "test-model", region: "ap-south-1", send, onTelemetry });
+  return new BedrockExtractionProvider({ modelId: "test-model", region: "ap-south-1", send, onTelemetry, onLifecycle: quiet });
 }
 
 test("Converse request separates instructions/document and records bounded, private telemetry", async () => {
@@ -71,7 +71,7 @@ test("malformed JSON, truncation, filtering and tool requests are rejected witho
 });
 
 test("SDK failure categories are sanitized, never retried, and unknown usage is not zero", async () => {
-  for (const [name, expected] of [["AccessDeniedException", "access_denied"], ["ThrottlingException", "throttled"],
+  for (const [name, expected] of [["AccessDeniedException", "authorization_error"], ["ThrottlingException", "throttled"],
     ["ModelNotReadyException", "unavailable"], ["CredentialsProviderError", "credentials_error"]] as const) {
     let calls = 0;
     const events: BedrockTelemetry[] = [];
@@ -106,7 +106,7 @@ test("network, authentication and timeout diagnostics expose only safe details",
   const p = provider(async () => {
     throw Object.assign(new Error("PRIVATE AWS RESPONSE"), { name: "AccessDeniedException", $metadata: { httpStatusCode: 403, requestId: "aws-123" } });
   }, event => events.push(event));
-  await assert.rejects(p.extract("Supplier: Atlas"), (error: unknown) => error instanceof BedrockExtractionError && error.category === "access_denied");
+  await assert.rejects(p.extract("Supplier: Atlas"), (error: unknown) => error instanceof BedrockExtractionError && error.category === "authorization_error");
   assert.deepEqual(events[0]!.failure, { name: "AccessDeniedException", code: null, httpStatus: 403 });
   assert.equal(events[0]!.awsRequestId, "aws-123");
   assert.ok(!JSON.stringify(events).includes("PRIVATE AWS RESPONSE"));
@@ -121,7 +121,7 @@ test("pre-aborted calls never invoke the SDK", async () => {
 });
 
 test("deadline reaches SDK cancellation and rejects a result after cancellation", async () => {
-  const p = new BedrockExtractionProvider({ modelId: "test", region: "ap-south-1", timeoutMs: 5, onTelemetry: quiet,
+  const p = new BedrockExtractionProvider({ modelId: "test", region: "ap-south-1", timeoutMs: 5, onTelemetry: quiet, onLifecycle: quiet,
     send: (_command, { abortSignal }) => new Promise((_resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("deadline was not forwarded")), 1000);
       abortSignal.addEventListener("abort", () => { clearTimeout(timer); const e = new Error("cancelled"); e.name = "AbortError"; reject(e); }, { once: true });
