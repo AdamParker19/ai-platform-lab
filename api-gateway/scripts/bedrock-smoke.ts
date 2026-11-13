@@ -5,7 +5,7 @@ import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { BedrockExtractionProvider, BedrockExtractionError, type BedrockTelemetry, type ConverseSender } from "../src/extraction/bedrock.js";
+import { BedrockExtractionProvider, BedrockExtractionError, type BedrockTelemetry, type ConverseSender, type RequestEvent } from "../src/extraction/bedrock.js";
 import { Extractor, ExtractionValidationError } from "../src/extraction/extractor.js";
 import { sha256 } from "../src/extraction/provenance.js";
 import { parsePromptVariant } from "../src/extraction/prompts.js";
@@ -57,9 +57,11 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
   const progress = (message: string) => { try { onProgress?.(message); } catch { /* Diagnostics must not change results. */ } };
   // A test can inject a sender; offline mode always injects one. No warm-up calls.
   const observations: BedrockTelemetry[] = [];
+  const lifecycle: RequestEvent[] = [];
   const provider = new BedrockExtractionProvider({ modelId: config.modelId, region: config.region, promptVariant: config.promptVariant,
     maxOutputTokens: 256, timeoutMs: 30000, send: send ?? (config.live ? undefined : offlineSender),
-    onTelemetry: event => observations.push(event) });
+    onTelemetry: event => observations.push(event),
+    onLifecycle: event => { lifecycle.push(event); progress(JSON.stringify(event)); } });
   const extractor = new Extractor(provider);
   const rows = [];
   const startedAt = new Date().toISOString();
@@ -73,18 +75,18 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
     let result: Awaited<ReturnType<Extractor["extractWithGrounding"]>> | null = null;
     let errorCategory: string | null = null;
     progress(`Starting case ${index + 1}/${smokeCases.length} (${fixture.id}); request ID ${requestId}.`);
-    const pending = setTimeout(() => progress(`Case ${index + 1} is still pending after 30 seconds; SDK cancellation may be pending. The remote outcome may be unknown; do not retry until investigating.`), 30000);
     try { result = await extractor.extractWithGrounding(fixture.document, { requestId }); }
     catch (error) {
       errorCategory = error instanceof BedrockExtractionError ? error.category
         : error instanceof ExtractionValidationError ? "invalid_response" : "provider_error";
-    } finally { clearTimeout(pending); }
+    }
     const telemetry = observations.find(o => o.requestId === requestId);
     rows.push({ caseId: fixture.id, requestId, expected: fixture.expected, actual: result?.extraction ?? null,
       grounding: result?.grounding ?? null, supplierVerified: result?.grounding.status === "verified",
       outcome: errorCategory ?? result!.grounding.status, errorCategory,
       exactMatch: result ? isDeepStrictEqual(result.extraction, fixture.expected) : false,
-      telemetry: telemetry ?? null, estimatedCostUsd: config.live ? estimateCost(telemetry, config.inputPrice, config.outputPrice) : null });
+      telemetry: telemetry ?? null, lifecycle: lifecycle.filter(event => event.requestId === requestId),
+      estimatedCostUsd: config.live ? estimateCost(telemetry, config.inputPrice, config.outputPrice) : null });
     const failure = telemetry?.failure;
     const details = errorCategory && failure
       ? ` name=${failure.name ?? "unknown"} code=${failure.code ?? "unknown"} httpStatus=${failure.httpStatus ?? "unknown"} awsRequestId=${telemetry?.awsRequestId ?? "unknown"}` : "";

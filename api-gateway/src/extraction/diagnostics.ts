@@ -4,7 +4,7 @@ export type FailureDiagnostic = { name: string | null; code: string | null; http
 
 const names = new Set([
   "AbortError", "TimeoutError", "CredentialsProviderError", "AccessDeniedException", "UnrecognizedClientException",
-  "ExpiredTokenException", "ValidationException", "ResourceNotFoundException", "ThrottlingException",
+  "ExpiredTokenException", "InvalidSignatureException", "ValidationException", "ResourceNotFoundException", "ThrottlingException",
   "ServiceQuotaExceededException", "ModelNotReadyException", "ServiceUnavailableException", "InternalServerException",
 ]);
 const codes = new Set([
