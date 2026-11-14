@@ -13,6 +13,114 @@ The classifier is trained offline on the free UCI Amazon sentiment subset. Start
 
 Start with [Challenge #4: ML to AWS walkthrough](docs/challenge-04-ml-to-aws.md) for the free dataset, training, metrics, local serving, Docker, and existing AWS publish/deploy/rollback workflows.
 
+Continue with [Bedrock lab 1: provider and evaluation](docs/bedrock-lab-01-provider-and-evaluation.md)
+for a five-case extraction smoke check with offline mocks, explicit live-call controls,
+schema validation, supplier grounding, and latency/token/cost evidence.
+
+## JumpStart request practice
+
+From `api-gateway`, run `npm run verify:jumpstart` to print a product-extraction
+request using the JSON contract in AWS's
+[FLAN-T5 XL ModelBuilder example](https://docs.aws.amazon.com/sagemaker/latest/dg/jumpstart-foundation-models-use-python-sdk-model-class.html).
+The script runs locally with the existing development dependencies and incurs no
+AWS charges. Its output is the prepared request body. A model response requires
+a later endpoint invocation.
+
+Inspect `api-gateway/scripts/jumpstart-preflight.ts`. `buildProductRequest` takes
+the document, adds the extraction instruction, and limits generation to 64 new
+tokens. It rejects an empty document and preserves the supplied text. The sample
+document is at the bottom of the file. The `import.meta.url` check runs the sample
+only when the script is executed directly, so tests can import the function.
+
+Run the request tests from `api-gateway` with
+`node --import tsx --test tests/jumpstart-preflight.test.ts`.
+
+## Bedrock request flight recorder
+
+For one **live** diagnostic request, put your existing settings in
+`api-gateway/.env` (plain `NAME=value` lines):
+
+```dotenv
+AWS_PROFILE=ai-platform-lab-login
+AWS_REGION=ap-south-1
+BEDROCK_REGION=ap-south-1
+BEDROCK_MODEL_ID=apac.amazon.nova-micro-v1:0
+```
+
+From `api-gateway`, run:
+
+```bash
+npm run verify:bedrock:single
+```
+
+This submits only the first synthetic fixture using the existing provider,
+Extractor, schema and grounding checks. There is one SDK attempt, no warm-up or
+retries, a 30-second application deadline and a 256-output-token limit. The runner
+prints lifecycle events, the final extraction and telemetry, and saves a JSON
+report under `api-gateway/evaluation-results/`, including on provider failure.
+The report destination is reserved before inference; an existing file is never
+overwritten. `.env` is resolved from the project directory; already-set shell
+variables take precedence. The existing `.env` remains git-ignored.
+
+Use `npm run verify:bedrock:single -- --offline` to check this command without
+AWS access, or `-- --output PATH` to choose a report path. Optional
+`BEDROCK_TIMEOUT_MS` adjusts the deadline (1–120000 ms). Optional
+`BEDROCK_INPUT_USD_PER_MILLION` and `BEDROCK_OUTPUT_USD_PER_MILLION` accept current
+operator-reviewed prices; leave both unset to record unknown estimated cost.
+Token usage is still reported when AWS provides it. A single fixture does not
+establish model quality, and cancellation cannot prove AWS stopped processing.
+
+Bedrock now emits JSON lifecycle events immediately, including while credentials or
+the SDK are pending. Run the deterministic checks without AWS:
+
+```bash
+cd api-gateway
+npm ci
+node --import tsx --test tests/bedrock-lifecycle.test.ts tests/bedrock.test.ts tests/bedrock-smoke.test.ts
+npm run verify:bedrock
+```
+
+The smoke runner prints lifecycle events to stderr and saves them per case in its
+JSON report. It defaults to scripted offline responses. An injected sender skips
+`credentials_resolved` unless a credential resolver is supplied; offline success
+does not establish working AWS credentials or live model access.
+
+Illustrative successful live request (IDs replaced, no request content):
+
+```jsonl
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-001","stage":"starting","elapsedMs":0,"timestamp":"2026-11-12T12:00:00.000Z","awsRequestId":null,"errorCategory":null,"failure":null}
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-001","stage":"credentials_resolved","elapsedMs":5,"timestamp":"2026-11-12T12:00:00.005Z","awsRequestId":null,"errorCategory":null,"failure":null}
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-001","stage":"request_started","elapsedMs":6,"timestamp":"2026-11-12T12:00:00.006Z","awsRequestId":null,"errorCategory":null,"failure":null}
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-001","stage":"response_received","elapsedMs":250,"timestamp":"2026-11-12T12:00:00.250Z","awsRequestId":"aws-001","errorCategory":null,"failure":null}
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-001","stage":"completed","elapsedMs":251,"timestamp":"2026-11-12T12:00:00.251Z","awsRequestId":"aws-001","errorCategory":null,"failure":null}
+```
+
+An access-denied request follows the same first three stages, then ends with:
+
+```jsonl
+{"service":"bedrock-extraction","event":"request_lifecycle","requestId":"local-002","stage":"failed","elapsedMs":85,"timestamp":"2026-11-12T12:01:00.085Z","awsRequestId":"aws-002","errorCategory":"authorization_error","failure":{"name":"AccessDeniedException","code":null,"httpStatus":403}}
+```
+
+The provider's default 30-second deadline covers credential resolution and the SDK
+call. It aborts the SDK and rejects the caller's wait even if the operation ignores
+cancellation. Late credential resolution cannot start a request, and late SDK
+settlement cannot emit a second terminal event. The gateway separately enforces
+`LLM_TIMEOUT_MS` and returns HTTP 504, even for a provider that ignores its signal.
+
+`request_started` means the adapter called the SDK; it does not prove a packet left
+the machine or AWS received it. `completed` means model JSON parsed; schema and
+grounding checks remain downstream. Local cancellation cannot guarantee AWS stopped
+processing or that an invocation was unbilled. Startup failures before the runner
+loads still require npm/Node terminal diagnostics.
+
+Errors use the existing sanitized diagnostic helper: credentials →
+`credentials_error`, permission denial → `authorization_error` (renamed from
+`access_denied`), HTTP 429 → `throttled`, DNS/reset → `network_error`, deadline →
+`timeout`. Only allowlisted error identifiers, HTTP status and request IDs are
+logged; prompts, document content, SDK messages and credential values are omitted.
+SDK `maxAttempts` stays explicitly **1** for this diagnostic lab. Neither gateway
+nor adapter retries, so a timeout cannot silently multiply paid requests.
+
 ## Run locally
 
 Terminal 1, from the repository root (Bash/WSL/macOS/Linux):
