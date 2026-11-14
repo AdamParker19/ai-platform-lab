@@ -19,6 +19,39 @@ schema validation, supplier grounding, and latency/token/cost evidence.
 
 ## Bedrock request flight recorder
 
+For one **live** diagnostic request, put your existing settings in
+`api-gateway/.env` (plain `NAME=value` lines):
+
+```dotenv
+AWS_PROFILE=ai-platform-lab-login
+AWS_REGION=ap-south-1
+BEDROCK_REGION=ap-south-1
+BEDROCK_MODEL_ID=apac.amazon.nova-micro-v1:0
+```
+
+From `api-gateway`, run:
+
+```bash
+npm run verify:bedrock:single
+```
+
+This submits only the first synthetic fixture using the existing provider,
+Extractor, schema and grounding checks. There is one SDK attempt, no warm-up or
+retries, a 30-second application deadline and a 256-output-token limit. The runner
+prints lifecycle events, the final extraction and telemetry, and saves a JSON
+report under `api-gateway/evaluation-results/`, including on provider failure.
+The report destination is reserved before inference; an existing file is never
+overwritten. `.env` is resolved from the project directory; already-set shell
+variables take precedence. The existing `.env` remains git-ignored.
+
+Use `npm run verify:bedrock:single -- --offline` to check this command without
+AWS access, or `-- --output PATH` to choose a report path. Optional
+`BEDROCK_TIMEOUT_MS` adjusts the deadline (1–120000 ms). Optional
+`BEDROCK_INPUT_USD_PER_MILLION` and `BEDROCK_OUTPUT_USD_PER_MILLION` accept current
+operator-reviewed prices; leave both unset to record unknown estimated cost.
+Token usage is still reported when AWS provides it. A single fixture does not
+establish model quality, and cancellation cannot prove AWS stopped processing.
+
 Bedrock now emits JSON lifecycle events immediately, including while credentials or
 the SDK are pending. Run the deterministic checks without AWS:
 
