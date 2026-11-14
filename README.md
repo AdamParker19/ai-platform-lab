@@ -17,6 +17,24 @@ Continue with [Bedrock lab 1: provider and evaluation](docs/bedrock-lab-01-provi
 for a five-case extraction smoke check with offline mocks, explicit live-call controls,
 schema validation, supplier grounding, and latency/token/cost evidence.
 
+## JumpStart request practice
+
+From `api-gateway`, run `npm run verify:jumpstart` to print a product-extraction
+request using the JSON contract in AWS's
+[FLAN-T5 XL ModelBuilder example](https://docs.aws.amazon.com/sagemaker/latest/dg/jumpstart-foundation-models-use-python-sdk-model-class.html).
+The script runs locally with the existing development dependencies and incurs no
+AWS charges. Its output is the prepared request body. A model response requires
+a later endpoint invocation.
+
+Inspect `api-gateway/scripts/jumpstart-preflight.ts`. `buildProductRequest` takes
+the document, adds the extraction instruction, and limits generation to 64 new
+tokens. It rejects an empty document and preserves the supplied text. The sample
+document is at the bottom of the file. The `import.meta.url` check runs the sample
+only when the script is executed directly, so tests can import the function.
+
+Run the request tests from `api-gateway` with
+`node --import tsx --test tests/jumpstart-preflight.test.ts`.
+
 ## Bedrock request flight recorder
 
 For one **live** diagnostic request, put your existing settings in
