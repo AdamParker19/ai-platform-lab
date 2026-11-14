@@ -1,9 +1,9 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdir, open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { BedrockExtractionProvider, BedrockExtractionError, type BedrockTelemetry, type ConverseSender, type RequestEvent } from "../src/extraction/bedrock.js";
 import { Extractor, ExtractionValidationError } from "../src/extraction/extractor.js";
@@ -38,7 +38,17 @@ export function parseSmokeOptions(args: string[], env: NodeJS.ProcessEnv = proce
   return { live, modelId, region, promptVariant, inputPrice, outputPrice,
     output: resolve(values.get("--output") ?? `evaluation-results/bedrock-${live ? "live" : "offline"}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`) };
 }
-export type SmokeOptions = ReturnType<typeof parseSmokeOptions>;
+export type SmokeOptions = ReturnType<typeof parseSmokeOptions> & { caseLimit?: number; timeoutMs?: number };
+
+export const gatewayDirectory = fileURLToPath(new URL("../", import.meta.url));
+export function loadGatewayEnv() {
+  // Resolve relative to this project, even when launched from another directory.
+  // Existing shell variables take precedence over .env, matching dotenv defaults.
+  const loaded = loadEnv({ path: resolve(gatewayDirectory, ".env"), quiet: true });
+  if (loaded.error && (loaded.error as NodeJS.ErrnoException).code !== "ENOENT") {
+    throw new Error("Could not read api-gateway/.env");
+  }
+}
 
 export function estimateCost(telemetry: BedrockTelemetry | undefined, inputPrice: number | null, outputPrice: number | null): number | null {
   if (!telemetry || telemetry.inputTokens === null || telemetry.outputTokens === null || inputPrice === null || outputPrice === null) return null;
@@ -54,12 +64,16 @@ export const offlineSender: ConverseSender = async command => {
 };
 
 export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onProgress?: (message: string) => void) {
+  const caseLimit = config.caseLimit ?? smokeCases.length;
+  if (!Number.isInteger(caseLimit) || caseLimit < 1 || caseLimit > smokeCases.length) throw new Error("Invalid smoke case limit");
+  const cases = smokeCases.slice(0, caseLimit);
+  const timeoutMs = config.timeoutMs ?? 30000;
   const progress = (message: string) => { try { onProgress?.(message); } catch { /* Diagnostics must not change results. */ } };
   // A test can inject a sender; offline mode always injects one. No warm-up calls.
   const observations: BedrockTelemetry[] = [];
   const lifecycle: RequestEvent[] = [];
   const provider = new BedrockExtractionProvider({ modelId: config.modelId, region: config.region, promptVariant: config.promptVariant,
-    maxOutputTokens: 256, timeoutMs: 30000, send: send ?? (config.live ? undefined : offlineSender),
+    maxOutputTokens: 256, timeoutMs, send: send ?? (config.live ? undefined : offlineSender),
     onTelemetry: event => observations.push(event),
     onLifecycle: event => { lifecycle.push(event); progress(JSON.stringify(event)); } });
   const extractor = new Extractor(provider);
@@ -70,11 +84,11 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
   progress("Checking source revision (up to two seconds per Git command).");
   try { codeRevision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, windowsHide: true }).trim(); } catch { /* unavailable or timed out */ }
   try { workingTreeDirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000, windowsHide: true }).trim().length > 0; } catch { /* unavailable or timed out */ }
-  for (const [index, fixture] of smokeCases.entries()) {
+  for (const [index, fixture] of cases.entries()) {
     const requestId = randomUUID();
     let result: Awaited<ReturnType<Extractor["extractWithGrounding"]>> | null = null;
     let errorCategory: string | null = null;
-    progress(`Starting case ${index + 1}/${smokeCases.length} (${fixture.id}); request ID ${requestId}.`);
+    progress(`Starting case ${index + 1}/${cases.length} (${fixture.id}); request ID ${requestId}.`);
     try { result = await extractor.extractWithGrounding(fixture.document, { requestId }); }
     catch (error) {
       errorCategory = error instanceof BedrockExtractionError ? error.category
@@ -90,24 +104,24 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
     const failure = telemetry?.failure;
     const details = errorCategory && failure
       ? ` name=${failure.name ?? "unknown"} code=${failure.code ?? "unknown"} httpStatus=${failure.httpStatus ?? "unknown"} awsRequestId=${telemetry?.awsRequestId ?? "unknown"}` : "";
-    progress(`Case ${index + 1}/${smokeCases.length} finished: ${rows.at(-1)!.outcome}.${details}`);
+    progress(`Case ${index + 1}/${cases.length} finished: ${rows.at(-1)!.outcome}.${details}`);
     // Stop on transport/permission failures; never retry or fall back to another provider.
     if (errorCategory && errorCategory !== "invalid_response") break;
   }
-  const complete = rows.length === smokeCases.length;
+  const complete = rows.length === cases.length;
   const estimates = rows.map(r => r.estimatedCostUsd);
   const report = {
     reportVersion: 1, mode: config.live ? "live" : "offline", startedAt, completedAt: new Date().toISOString(), codeRevision, workingTreeDirty,
     dataset: { version: "bedrock-smoke-v1", sha256: sha256(JSON.stringify(smokeCases.map(({ id, document, expected }) => ({ id, document, expected })))) },
     provenance: provider.metadata(), region: config.region,
-    configuration: { plannedCalls: 5, maxAttemptsPerCall: 1, maxOutputTokens: 256, timeoutMs: 30000, warmupCalls: 0 },
+    configuration: { plannedCalls: cases.length, maxAttemptsPerCall: 1, maxOutputTokens: 256, timeoutMs, warmupCalls: 0 },
     pricing: config.live ? { currency: "USD", inputUsdPerMillionTokens: config.inputPrice, outputUsdPerMillionTokens: config.outputPrice, source: "operator-supplied current rates; token-only estimate, not an AWS bill or spending cap" } : null,
     summary: { attemptedCases: rows.length, complete, schemaValidCases: rows.filter(r => r.actual !== null).length,
       supplierVerifiedCases: rows.filter(r => r.supplierVerified).length,
-      modelQuality: config.live ? { exactMatches: rows.filter(r => r.exactMatch).length, totalCases: smokeCases.length,
-        exactMatchRate: complete ? rows.filter(r => r.exactMatch).length / smokeCases.length : null } : null,
+      modelQuality: config.live ? { exactMatches: rows.filter(r => r.exactMatch).length, totalCases: cases.length,
+        exactMatchRate: complete ? rows.filter(r => r.exactMatch).length / cases.length : null } : null,
       estimatedCostUsd: config.live && estimates.length > 0 && estimates.every(v => v !== null) ? estimates.reduce<number>((sum, v) => sum + v!, 0) : null },
-    limitations: ["Five synthetic cases are a smoke check, not a representative quality benchmark or p95 latency estimate.",
+    limitations: ["Synthetic cases are a smoke check, not a representative quality benchmark or p95 latency estimate.",
       "Offline mode uses scripted responses; no model was evaluated and no token usage is fabricated.",
       "Supplier verification checks labelled text agreement only, not source authenticity or the other fields.",
       "Missing token usage means cost is unknown. Timeouts do not prove an invocation was unbilled."], rows,
@@ -115,10 +129,7 @@ export async function runSmoke(config: SmokeOptions, send?: ConverseSender, onPr
   return report;
 }
 
-async function main() {
-  const progress = (message: string) => console.error(`[bedrock-smoke] ${message}`);
-  progress("Runner started; validating configuration.");
-  const config = parseSmokeOptions(process.argv.slice(2));
+export async function saveSmokeReport(config: SmokeOptions, send?: ConverseSender, progress: (message: string) => void = () => {}) {
   await mkdir(dirname(config.output), { recursive: true });
   // Reserve the destination BEFORE any live call, rather than discovering a
   // collision after paying for inference and losing the resulting evidence.
@@ -126,10 +137,19 @@ async function main() {
   progress(`Reserved report at ${config.output}; it remains empty until the run finishes.`);
   let report: Awaited<ReturnType<typeof runSmoke>>;
   try {
-    report = await runSmoke(config, undefined, progress);
+    report = await runSmoke(config, send, progress);
     progress("Writing report.");
     await file.writeFile(JSON.stringify(report, null, 2) + "\n");
   } finally { await file.close(); }
+  return report;
+}
+
+async function main() {
+  const progress = (message: string) => console.error(`[bedrock-smoke] ${message}`);
+  progress("Runner started; validating configuration.");
+  loadGatewayEnv();
+  const config = parseSmokeOptions(process.argv.slice(2));
+  const report = await saveSmokeReport(config, undefined, progress);
   console.log(JSON.stringify({ mode: report.mode, report: config.output, ...report.summary }, null, 2));
   if (!report.summary.complete || report.rows.some(r => r.errorCategory)) process.exitCode = 1;
 }
