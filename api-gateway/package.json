@@ -14,6 +14,7 @@
     "verify:live": "node --import tsx scripts/verify-live.ts",
     "verify:bedrock": "node --import tsx scripts/bedrock-smoke.ts",
     "verify:bedrock:single": "node --import tsx scripts/bedrock-single.ts",
+    "verify:jumpstart": "node --import tsx scripts/jumpstart-preflight.ts",
     "worker:dev": "node --import tsx src/jobs/worker-main.ts",
     "worker": "node dist/jobs/worker-main.js"
   },
