@@ -33,6 +33,7 @@ GATEWAY = Path(__file__).resolve().parents[1] / "api-gateway"
 
 # The endpoint must be gone before deleting its configuration and model.
 NAME_FIELDS = {"endpoint": "EndpointName", "endpoint-config": "EndpointConfigName", "model": "ModelName"}
+ENDPOINT_IN_PROGRESS = {"Creating", "Updating", "SystemUpdating", "RollingBack"}
 
 
 def deployment_requests(run_id):
@@ -133,25 +134,21 @@ def check(profile):
     print(f"Verified {DEPLOYER} and confirmed the three lab resource names are available in {REGION}.", flush=True)
 
 
-def wait_for_endpoint(profile, *, deleting=False, timeout=READY_TIMEOUT):
+def wait_for_endpoint(profile, *, timeout=READY_TIMEOUT):
     deadline = time.monotonic() + timeout
     previous = None
     while time.monotonic() < deadline:
         endpoint = describe(profile, "endpoint")
-        if endpoint is None and deleting:
-            return
         status = endpoint["EndpointStatus"] if endpoint else "Not visible yet"
         if status != previous:
             print(f"Endpoint status: {status}", flush=True)
             previous = status
-        if not deleting:
-            if status == "InService":
-                return
-            if status in {"Failed", "OutOfService", "Deleting", "UpdateRollbackFailed"}:
-                raise RuntimeError(f"Endpoint {status}: {endpoint.get('FailureReason', '')}")
+        if status == "InService":
+            return
+        if status in {"Failed", "OutOfService", "Deleting", "UpdateRollbackFailed"}:
+            raise RuntimeError(f"Endpoint {status}: {endpoint.get('FailureReason', '')}")
         time.sleep(min(POLL_INTERVAL, max(0, deadline - time.monotonic())))
-    action = "delete" if deleting else "reach InService"
-    raise RuntimeError(f"Endpoint did not {action} within {timeout} seconds.")
+    raise RuntimeError(f"Endpoint did not reach InService within {timeout} seconds.")
 
 
 def wait_for_ownership(profile, resource, run_id):
@@ -165,6 +162,43 @@ def wait_for_ownership(profile, resource, run_id):
         if owner is not None or time.monotonic() >= deadline:
             raise RuntimeError(f"Refusing to delete {arn} without matching run tag {run_id}.")
         time.sleep(2)
+
+
+def delete_endpoint(profile, run_id, current):
+    deadline = time.monotonic() + CLEANUP_TIMEOUT
+    deletion_requested = False
+    previous_status = None
+    wait_reported = False
+
+    while current is not None:
+        status = current["EndpointStatus"]
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"Endpoint {NAME} was still {status} when cleanup timed out. Retry cleanup.")
+        if status != previous_status:
+            print(f"Endpoint status during cleanup: {status}", flush=True)
+            if current.get("FailureReason"):
+                print(f"Endpoint failure: {current['FailureReason']}", flush=True)
+            previous_status = status
+
+        if not deletion_requested and status not in ENDPOINT_IN_PROGRESS and status != "Deleting":
+            # Recheck the tag before each delete, including after a state change or retry.
+            wait_for_ownership(profile, "endpoint", run_id)
+            try:
+                aws(profile, "sagemaker", "delete-endpoint", request={"EndpointName": NAME})
+            except AwsError as error:
+                if error.code != "ValidationException" or "cannot update in-progress endpoint" not in error.details.lower():
+                    raise
+                if not wait_reported:
+                    print("SageMaker is still changing the endpoint. Waiting to retry deletion.", flush=True)
+                    wait_reported = True
+            else:
+                deletion_requested = True
+                print(f"Deletion requested for endpoint {NAME}.", flush=True)
+                current = describe(profile, "endpoint")
+                continue
+
+        time.sleep(min(POLL_INTERVAL, max(0, deadline - time.monotonic())))
+        current = describe(profile, "endpoint")
 
 
 def cleanup(profile, run_id, uncertain_resource=None):
@@ -181,12 +215,12 @@ def cleanup(profile, run_id, uncertain_resource=None):
         if current is None:
             continue
         wait_for_ownership(profile, resource, run_id)
-        if current.get("EndpointStatus") != "Deleting":
-            print(f"Deleting {resource} {NAME}.", flush=True)
-            aws(profile, "sagemaker", f"delete-{resource}", request={field: NAME})
         if resource == "endpoint":
-            wait_for_endpoint(profile, deleting=True, timeout=CLEANUP_TIMEOUT)
-        elif describe(profile, resource) is not None:
+            delete_endpoint(profile, run_id, current)
+            continue
+        print(f"Deleting {resource} {NAME}.", flush=True)
+        aws(profile, "sagemaker", f"delete-{resource}", request={field: NAME})
+        if describe(profile, resource) is not None:
             raise RuntimeError(f"{resource} {NAME} is still visible after deletion. Retry cleanup if it remains.")
     print("Cleanup complete. The endpoint, configuration, and model are absent.", flush=True)
 
@@ -246,9 +280,13 @@ def run(profile):
         wait_for_ownership(profile, "endpoint", run_id)
         invoke_once(profile, fixture)
     finally:
+        run_error = sys.exception()
         try:
             cleanup(profile, run_id, uncertain_resource)
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt):
+            if run_error is not None:
+                print(f"Run stopped before cleanup: {str(run_error) or type(run_error).__name__}",
+                      file=sys.stderr, flush=True)
             print(f"Cleanup needs attention. Check the named endpoint in Mumbai, then run: "
                   f"python scripts/jumpstart_endpoint.py cleanup --run-id {run_id} --profile {profile}",
                   file=sys.stderr, flush=True)

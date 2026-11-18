@@ -9,6 +9,63 @@ import jumpstart_endpoint as lab
 
 
 class JumpStartEndpointTest(unittest.TestCase):
+    def test_cleanup_waits_for_creating_endpoint_and_retries_in_progress_error(self):
+        states = iter([
+            {"EndpointStatus": "Creating"},
+            {"EndpointStatus": "Failed", "FailureReason": "Container failed health checks"},
+            {"EndpointStatus": "Failed"},
+            {"EndpointStatus": "Deleting"},
+            None,
+        ])
+        events = []
+        endpoint_absent = False
+        rejected_once = False
+
+        def describe(profile, resource):
+            nonlocal endpoint_absent
+            if resource == "endpoint":
+                endpoint = next(states)
+                endpoint_absent = endpoint is None
+                events.append(endpoint["EndpointStatus"] if endpoint else "absent")
+                return endpoint
+            return None if f"delete-{resource}" in events else {"Name": lab.NAME}
+
+        def aws(profile, service, operation, *args, request=None):
+            nonlocal rejected_once
+            if operation == "list-tags":
+                return {"Tags": [{"Key": lab.RUN_TAG, "Value": "my-run"}]}
+            events.append(operation)
+            if operation == "delete-endpoint" and not rejected_once:
+                rejected_once = True
+                raise lab.AwsError(operation, 'An error occurred (ValidationException): '
+                                   f'Cannot update in-progress endpoint "{lab.NAME}".')
+            if operation != "delete-endpoint":
+                self.assertTrue(endpoint_absent)
+            return {}
+
+        output = io.StringIO()
+        with (patch.object(lab, "describe", side_effect=describe),
+              patch.object(lab, "aws", side_effect=aws),
+              patch.object(lab.time, "sleep"),
+              contextlib.redirect_stdout(output)):
+            lab.cleanup(lab.DEFAULT_PROFILE, "my-run")
+
+        self.assertEqual(events, ["Creating", "Failed", "delete-endpoint", "Failed",
+                                  "delete-endpoint", "Deleting", "absent",
+                                  "delete-endpoint-config", "delete-model"])
+        self.assertIn("Container failed health checks", output.getvalue())
+        self.assertIn("Cleanup complete.", output.getvalue())
+
+    def test_cleanup_timeout_does_not_remove_dependencies(self):
+        with (patch.object(lab, "describe", return_value={"EndpointStatus": "Creating"}) as describe,
+              patch.object(lab, "aws", return_value={"Tags": [{"Key": lab.RUN_TAG, "Value": "my-run"}]}) as aws,
+              patch.object(lab, "CLEANUP_TIMEOUT", 0)):
+            with self.assertRaisesRegex(RuntimeError, "still Creating when cleanup timed out"):
+                lab.cleanup(lab.DEFAULT_PROFILE, "my-run")
+
+        describe.assert_called_once_with(lab.DEFAULT_PROFILE, "endpoint")
+        self.assertEqual([call.args[2] for call in aws.call_args_list], ["list-tags"])
+
     def test_run_invokes_once_and_checks_deletion_before_removing_dependencies(self):
         for invocation_fails in (False, True):
             with self.subTest(invocation_fails=invocation_fails):

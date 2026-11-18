@@ -62,7 +62,10 @@ and whether the extracted text matched `Steel Washers`. This is one smoke test.
 
 Save the printed **Run ID**. The script attempts cleanup on success, failure,
 and Ctrl+C. It checks the run tag before deleting and waits for the endpoint to
-disappear before deleting its configuration and model. If login expires, the
+disappear before deleting its configuration and model. If SageMaker is still
+creating or updating the endpoint, cleanup polls for up to five minutes and
+retries deletion once the service permits it. If cleanup times out, run it again
+with the same Run ID. If login expires, the
 network drops, or the process is closed, review **SageMaker AI → Deployments &
 inference → Endpoints** in Mumbai and resume cleanup with the saved ID.
 
