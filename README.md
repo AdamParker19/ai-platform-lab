@@ -35,6 +35,9 @@ only when the script is executed directly, so tests can import the function.
 Run the request tests from `api-gateway` with
 `node --import tsx --test tests/jumpstart-preflight.test.ts`.
 
+To preview the AWS hosting configuration or review the live smoke test, see the
+[JumpStart endpoint lab](docs/jumpstart-endpoint-lab.md).
+
 ## Bedrock request flight recorder
 
 For one **live** diagnostic request, put your existing settings in
