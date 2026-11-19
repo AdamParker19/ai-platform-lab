@@ -1,0 +1,59 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageDistilBertModel",
+      "Effect": "Allow",
+      "Action": ["sagemaker:CreateModel", "sagemaker:DescribeModel", "sagemaker:DeleteModel"],
+      "Resource": "arn:aws:sagemaker:ap-south-1:501683248889:model/ai-platform-lab-distilbert-qa"
+    },
+    {
+      "Sid": "CreateDistilBertCpuConfig",
+      "Effect": "Allow",
+      "Action": "sagemaker:CreateEndpointConfig",
+      "Resource": "arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa",
+      "Condition": {
+        "ForAllValues:StringEquals": {"sagemaker:InstanceTypes": ["ml.m5.large"]},
+        "Null": {"sagemaker:InstanceTypes": "false"}
+      }
+    },
+    {
+      "Sid": "ReadAndDeleteDistilBertConfig",
+      "Effect": "Allow",
+      "Action": ["sagemaker:DescribeEndpointConfig", "sagemaker:DeleteEndpointConfig"],
+      "Resource": "arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa"
+    },
+    {
+      "Sid": "CreateDistilBertEndpoint",
+      "Effect": "Allow",
+      "Action": "sagemaker:CreateEndpoint",
+      "Resource": [
+        "arn:aws:sagemaker:ap-south-1:501683248889:endpoint/ai-platform-lab-distilbert-qa",
+        "arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa"
+      ]
+    },
+    {
+      "Sid": "ReadInvokeAndDeleteDistilBertEndpoint",
+      "Effect": "Allow",
+      "Action": ["sagemaker:DescribeEndpoint", "sagemaker:InvokeEndpoint", "sagemaker:DeleteEndpoint"],
+      "Resource": "arn:aws:sagemaker:ap-south-1:501683248889:endpoint/ai-platform-lab-distilbert-qa"
+    },
+    {
+      "Sid": "TagDistilBertLabResources",
+      "Effect": "Allow",
+      "Action": ["sagemaker:AddTags", "sagemaker:ListTags"],
+      "Resource": [
+        "arn:aws:sagemaker:ap-south-1:501683248889:model/ai-platform-lab-distilbert-qa",
+        "arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa",
+        "arn:aws:sagemaker:ap-south-1:501683248889:endpoint/ai-platform-lab-distilbert-qa"
+      ]
+    },
+    {
+      "Sid": "PassLabExecutionRoleToSageMaker",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::501683248889:role/ai-platform-lab-sagemaker-execution",
+      "Condition": {"StringEquals": {"iam:PassedToService": "sagemaker.amazonaws.com"}}
+    }
+  ]
+}

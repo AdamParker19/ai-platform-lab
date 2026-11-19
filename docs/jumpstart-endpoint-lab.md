@@ -22,25 +22,24 @@ In Service Quotas, confirm `ml.m5.large for endpoint usage` has room for one
 instance in `ap-south-1`. Check the **applied** account quota for endpoint usage.
 The GPU quota and the previous serverless deployment do not establish this quota.
 
-Extend the existing lab deployer's SageMaker resource grants to the three CPU
-resources with the same action scope as the corresponding FLAN-T5 XL resources.
-Its existing `iam:PassRole` grant must cover the execution role in the preview.
+Use the IAM console with an administrator session to add two grants.
 
-```text
-arn:aws:sagemaker:ap-south-1:501683248889:model/ai-platform-lab-distilbert-qa
-arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa
-arn:aws:sagemaker:ap-south-1:501683248889:endpoint/ai-platform-lab-distilbert-qa
-```
+1. Under **Policies → Create policy → JSON**, paste the
+   [deployer policy](jumpstart-distilbert-deployer-policy.json) and save it as
+   `AiPlatformLabDistilBertQaDeployer`. Under **Users → anmol-ai-platform-dev →
+   Add permissions → Attach policies directly**, attach that customer managed
+   policy. It scopes SageMaker access to the three named CPU lab resources and
+   passes only the lab execution role to SageMaker. A customer managed policy
+   avoids the user's aggregate inline-policy size limit.
+2. Under **Roles → ai-platform-lab-sagemaker-execution → Add permissions →
+   Create inline policy**, paste the
+   [execution policy](jumpstart-distilbert-execution-policy.json) in the JSON
+   editor and save it as `ai-platform-lab-distilbert-hosting`. This adds access
+   to the pinned model files and CPU image repository. Keep the role's
+   existing ECR authentication and CloudWatch logging grants.
 
-The execution role needs `s3:GetObject` for the following object prefix,
-`s3:ListBucket` for `jumpstart-cache-prod-ap-south-1` with `s3:prefix` restricted
-to that prefix, and the existing ECR pull actions for the CPU repository below.
-The existing Mumbai ECR authorization token and endpoint log permissions apply.
-
-```text
-arn:aws:s3:::jumpstart-cache-prod-ap-south-1/huggingface-eqa/huggingface-eqa-distilbert-base-uncased/artifacts/inference-prepack/v1.0.0/*
-arn:aws:ecr:ap-south-1:763104351884:repository/huggingface-pytorch-inference
-```
+Run the following check as the lab user from your own terminal. If the session
+expired, renew it with `aws login --profile ai-platform-lab-login --region ap-south-1`.
 
 ```powershell
 python scripts/jumpstart_endpoint.py check --model distilbert-qa
