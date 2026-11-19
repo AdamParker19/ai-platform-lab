@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadDistilBertArtifact",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::jumpstart-cache-prod-ap-south-1/huggingface-eqa/huggingface-eqa-distilbert-base-uncased/artifacts/inference-prepack/v1.0.0/*"
+    },
+    {
+      "Sid": "ListDistilBertArtifactPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::jumpstart-cache-prod-ap-south-1",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "huggingface-eqa/huggingface-eqa-distilbert-base-uncased/artifacts/inference-prepack/v1.0.0/*"
+        }
+      }
+    },
+    {
+      "Sid": "PullDistilBertContainer",
+      "Effect": "Allow",
+      "Action": ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+      "Resource": "arn:aws:ecr:ap-south-1:763104351884:repository/huggingface-pytorch-inference"
+    }
+  ]
+}
