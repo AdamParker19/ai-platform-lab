@@ -164,8 +164,8 @@ def wait_for_ownership(profile, resource, run_id):
         time.sleep(2)
 
 
-def delete_endpoint(profile, run_id, current):
-    deadline = time.monotonic() + CLEANUP_TIMEOUT
+def delete_endpoint(profile, run_id, current, *, wait_seconds):
+    deadline = time.monotonic() + wait_seconds
     deletion_requested = False
     previous_status = None
     wait_reported = False
@@ -201,7 +201,7 @@ def delete_endpoint(profile, run_id, current):
         current = describe(profile, "endpoint")
 
 
-def cleanup(profile, run_id, uncertain_resource=None):
+def cleanup(profile, run_id, uncertain_resource=None, *, wait_seconds=CLEANUP_TIMEOUT):
     for resource, field in NAME_FIELDS.items():
         current = describe(profile, resource)
         if current is None and resource == uncertain_resource:
@@ -216,7 +216,7 @@ def cleanup(profile, run_id, uncertain_resource=None):
             continue
         wait_for_ownership(profile, resource, run_id)
         if resource == "endpoint":
-            delete_endpoint(profile, run_id, current)
+            delete_endpoint(profile, run_id, current, wait_seconds=wait_seconds)
             continue
         print(f"Deleting {resource} {NAME}.", flush=True)
         aws(profile, "sagemaker", f"delete-{resource}", request={field: NAME})
@@ -288,7 +288,7 @@ def run(profile):
                 print(f"Run stopped before cleanup: {str(run_error) or type(run_error).__name__}",
                       file=sys.stderr, flush=True)
             print(f"Cleanup needs attention. Check the named endpoint in Mumbai, then run: "
-                  f"python scripts/jumpstart_endpoint.py cleanup --run-id {run_id} --profile {profile}",
+                  f"python scripts/jumpstart_endpoint.py cleanup --run-id {run_id} --profile {profile} --wait-minutes 30",
                   file=sys.stderr, flush=True)
             raise
 
@@ -302,6 +302,8 @@ def main():
     read_only = commands.add_parser("check", help="Check the AWS identity and resource names without deploying.")
     recovery = commands.add_parser("cleanup", help="Delete the resources tagged for a specific run.")
     recovery.add_argument("--run-id", required=True, type=lambda value: uuid.UUID(value).hex)
+    recovery.add_argument("--wait-minutes", type=int, default=CLEANUP_TIMEOUT // 60,
+                          help="Minutes to wait for endpoint cleanup (default: %(default)s).")
     for command in (live, read_only, recovery):
         command.add_argument("--profile", default=DEFAULT_PROFILE)
     args = parser.parse_args()
@@ -314,8 +316,10 @@ def main():
     if args.command == "check":
         check(args.profile)
     elif args.command == "cleanup":
+        if args.wait_minutes < 1:
+            recovery.error("--wait-minutes must be a positive integer")
         require_lab_user(args.profile)
-        cleanup(args.profile, args.run_id)
+        cleanup(args.profile, args.run_id, wait_seconds=args.wait_minutes * 60)
     else:
         run(args.profile)
 

@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -58,13 +59,43 @@ class JumpStartEndpointTest(unittest.TestCase):
 
     def test_cleanup_timeout_does_not_remove_dependencies(self):
         with (patch.object(lab, "describe", return_value={"EndpointStatus": "Creating"}) as describe,
-              patch.object(lab, "aws", return_value={"Tags": [{"Key": lab.RUN_TAG, "Value": "my-run"}]}) as aws,
-              patch.object(lab, "CLEANUP_TIMEOUT", 0)):
+              patch.object(lab, "aws", return_value={"Tags": [{"Key": lab.RUN_TAG, "Value": "my-run"}]}) as aws):
             with self.assertRaisesRegex(RuntimeError, "still Creating when cleanup timed out"):
-                lab.cleanup(lab.DEFAULT_PROFILE, "my-run")
+                lab.cleanup(lab.DEFAULT_PROFILE, "my-run", wait_seconds=0)
 
         describe.assert_called_once_with(lab.DEFAULT_PROFILE, "endpoint")
         self.assertEqual([call.args[2] for call in aws.call_args_list], ["list-tags"])
+
+    def test_cleanup_cli_can_wait_past_default_deadline(self):
+        run_id = "a1234567890b4000a000000000000000"
+        elapsed = 0
+
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+
+        def describe(profile, resource):
+            if resource == "endpoint" and not aws.called:
+                status = "Creating" if elapsed <= lab.CLEANUP_TIMEOUT else "InService"
+                return {"EndpointStatus": status}
+            return None
+
+        with (patch.object(sys, "argv", ["jumpstart_endpoint.py", "cleanup", "--run-id", run_id,
+                                       "--wait-minutes", "30"]),
+              patch.object(lab, "require_lab_user") as verify_user,
+              patch.object(lab, "wait_for_ownership") as verify_owner,
+              patch.object(lab, "describe", side_effect=describe),
+              patch.object(lab, "aws") as aws,
+              patch.object(lab.time, "monotonic", side_effect=lambda: elapsed),
+              patch.object(lab.time, "sleep", side_effect=sleep),
+              contextlib.redirect_stdout(io.StringIO())):
+            lab.main()
+
+        self.assertGreater(elapsed, lab.CLEANUP_TIMEOUT)
+        verify_user.assert_called_once_with(lab.DEFAULT_PROFILE)
+        verify_owner.assert_called_with(lab.DEFAULT_PROFILE, "endpoint", run_id)
+        aws.assert_called_once_with(lab.DEFAULT_PROFILE, "sagemaker", "delete-endpoint",
+                                    request={"EndpointName": lab.NAME})
 
     def test_run_invokes_once_and_checks_deletion_before_removing_dependencies(self):
         for invocation_fails in (False, True):

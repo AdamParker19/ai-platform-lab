@@ -64,14 +64,14 @@ Save the printed **Run ID**. The script attempts cleanup on success, failure,
 and Ctrl+C. It checks the run tag before deleting and waits for the endpoint to
 disappear before deleting its configuration and model. If SageMaker is still
 creating or updating the endpoint, cleanup polls for up to five minutes and
-retries deletion once the service permits it. If cleanup times out, run it again
-with the same Run ID. If login expires, the
+retries deletion once the service permits it. If cleanup times out, resume with
+the same Run ID and a longer endpoint cleanup window. If login expires, the
 network drops, or the process is closed, review **SageMaker AI → Deployments &
 inference → Endpoints** in Mumbai and resume cleanup with the saved ID.
 
 ```powershell
 $runId = Read-Host "Paste the Run ID"
-python scripts/jumpstart_endpoint.py cleanup --run-id $runId
+python scripts/jumpstart_endpoint.py cleanup --run-id $runId --wait-minutes 30
 python scripts/jumpstart_endpoint.py check
 ```
 
