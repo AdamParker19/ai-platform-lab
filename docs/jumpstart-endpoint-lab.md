@@ -1,8 +1,69 @@
-# FLAN-T5 XL endpoint lab
+# JumpStart endpoint lab
 
 Run these commands in PowerShell from the repository root. The preview works
-with Python alone. The live smoke test also uses AWS CLI v2 and the gateway's
-Node.js 24 development dependencies.
+with Python alone. Live runs use AWS CLI v2. The FLAN-T5 XL run also uses the
+gateway's Node.js 24 development dependencies.
+
+## CPU option with DistilBERT
+
+This option answers a question by extracting text from the same sample supplier
+document. It uses version `3.0.12` of `huggingface-eqa-distilbert-base-uncased`
+on one `ml.m5.large` in Mumbai. The November 19, 2026 Mumbai hosting rate was
+**$0.121 per instance-hour**, or **about $0.06 for 30 billable minutes** of compute.
+Storage, data processing, logs, taxes, and credits affect the total. See the
+[pinned model specification](https://jumpstart-cache-prod-ap-south-1.s3.ap-south-1.amazonaws.com/community_models/huggingface-eqa-distilbert-base-uncased/specs_v3.0.12.json)
+and [Mumbai pricing data](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonSageMaker/current/ap-south-1/index.json).
+
+```powershell
+python scripts/jumpstart_endpoint.py plan --model distilbert-qa
+```
+
+In Service Quotas, confirm `ml.m5.large for endpoint usage` has room for one
+instance in `ap-south-1`. Check the **applied** account quota for endpoint usage.
+The GPU quota and the previous serverless deployment do not establish this quota.
+
+Extend the existing lab deployer's SageMaker resource grants to the three CPU
+resources with the same action scope as the corresponding FLAN-T5 XL resources.
+Its existing `iam:PassRole` grant must cover the execution role in the preview.
+
+```text
+arn:aws:sagemaker:ap-south-1:501683248889:model/ai-platform-lab-distilbert-qa
+arn:aws:sagemaker:ap-south-1:501683248889:endpoint-config/ai-platform-lab-distilbert-qa
+arn:aws:sagemaker:ap-south-1:501683248889:endpoint/ai-platform-lab-distilbert-qa
+```
+
+The execution role needs `s3:GetObject` for the following object prefix,
+`s3:ListBucket` for `jumpstart-cache-prod-ap-south-1` with `s3:prefix` restricted
+to that prefix, and the existing ECR pull actions for the CPU repository below.
+The existing Mumbai ECR authorization token and endpoint log permissions apply.
+
+```text
+arn:aws:s3:::jumpstart-cache-prod-ap-south-1/huggingface-eqa/huggingface-eqa-distilbert-base-uncased/artifacts/inference-prepack/v1.0.0/*
+arn:aws:ecr:ap-south-1:763104351884:repository/huggingface-pytorch-inference
+```
+
+```powershell
+python scripts/jumpstart_endpoint.py check --model distilbert-qa
+```
+
+After confirming capacity quota and approving the cost, run one live smoke test.
+The script waits for `InService`, sends one question and document as
+`application/list-text`, checks for the answer `Steel Washers`, and cleans up.
+The live milestone requires both the expected answer and the cleanup confirmation.
+
+```powershell
+python scripts/jumpstart_endpoint.py run --model distilbert-qa --approve-cost
+```
+
+If cleanup is interrupted, use the printed Run ID and specify the same model.
+
+```powershell
+$runId = Read-Host "Paste the Run ID"
+python scripts/jumpstart_endpoint.py cleanup --model distilbert-qa --run-id $runId --wait-minutes 30
+python scripts/jumpstart_endpoint.py check --model distilbert-qa
+```
+
+## FLAN-T5 XL GPU option
 
 ```powershell
 python scripts/jumpstart_endpoint.py plan

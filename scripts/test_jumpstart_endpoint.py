@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import jumpstart_endpoint as lab
 
+FLAN_NAME = lab.FLAN_T5_XL.name
+
 
 class JumpStartEndpointTest(unittest.TestCase):
     def test_cleanup_waits_for_creating_endpoint_and_retries_in_progress_error(self):
@@ -22,14 +24,15 @@ class JumpStartEndpointTest(unittest.TestCase):
         endpoint_absent = False
         rejected_once = False
 
-        def describe(profile, resource):
+        def describe(profile, resource, name):
+            self.assertEqual(name, FLAN_NAME)
             nonlocal endpoint_absent
             if resource == "endpoint":
                 endpoint = next(states)
                 endpoint_absent = endpoint is None
                 events.append(endpoint["EndpointStatus"] if endpoint else "absent")
                 return endpoint
-            return None if f"delete-{resource}" in events else {"Name": lab.NAME}
+            return None if f"delete-{resource}" in events else {"Name": name}
 
         def aws(profile, service, operation, *args, request=None):
             nonlocal rejected_once
@@ -39,7 +42,7 @@ class JumpStartEndpointTest(unittest.TestCase):
             if operation == "delete-endpoint" and not rejected_once:
                 rejected_once = True
                 raise lab.AwsError(operation, 'An error occurred (ValidationException): '
-                                   f'Cannot update in-progress endpoint "{lab.NAME}".')
+                                   f'Cannot update in-progress endpoint "{FLAN_NAME}".')
             if operation != "delete-endpoint":
                 self.assertTrue(endpoint_absent)
             return {}
@@ -49,7 +52,7 @@ class JumpStartEndpointTest(unittest.TestCase):
               patch.object(lab, "aws", side_effect=aws),
               patch.object(lab.time, "sleep"),
               contextlib.redirect_stdout(output)):
-            lab.cleanup(lab.DEFAULT_PROFILE, "my-run")
+            lab.cleanup(lab.DEFAULT_PROFILE, "my-run", FLAN_NAME)
 
         self.assertEqual(events, ["Creating", "Failed", "delete-endpoint", "Failed",
                                   "delete-endpoint", "Deleting", "absent",
@@ -61,9 +64,9 @@ class JumpStartEndpointTest(unittest.TestCase):
         with (patch.object(lab, "describe", return_value={"EndpointStatus": "Creating"}) as describe,
               patch.object(lab, "aws", return_value={"Tags": [{"Key": lab.RUN_TAG, "Value": "my-run"}]}) as aws):
             with self.assertRaisesRegex(RuntimeError, "still Creating when cleanup timed out"):
-                lab.cleanup(lab.DEFAULT_PROFILE, "my-run", wait_seconds=0)
+                lab.cleanup(lab.DEFAULT_PROFILE, "my-run", FLAN_NAME, wait_seconds=0)
 
-        describe.assert_called_once_with(lab.DEFAULT_PROFILE, "endpoint")
+        describe.assert_called_once_with(lab.DEFAULT_PROFILE, "endpoint", FLAN_NAME)
         self.assertEqual([call.args[2] for call in aws.call_args_list], ["list-tags"])
 
     def test_cleanup_cli_can_wait_past_default_deadline(self):
@@ -74,7 +77,8 @@ class JumpStartEndpointTest(unittest.TestCase):
             nonlocal elapsed
             elapsed += seconds
 
-        def describe(profile, resource):
+        def describe(profile, resource, name):
+            self.assertEqual(name, FLAN_NAME)
             if resource == "endpoint" and not aws.called:
                 status = "Creating" if elapsed <= lab.CLEANUP_TIMEOUT else "InService"
                 return {"EndpointStatus": status}
@@ -93,9 +97,9 @@ class JumpStartEndpointTest(unittest.TestCase):
 
         self.assertGreater(elapsed, lab.CLEANUP_TIMEOUT)
         verify_user.assert_called_once_with(lab.DEFAULT_PROFILE)
-        verify_owner.assert_called_with(lab.DEFAULT_PROFILE, "endpoint", run_id)
+        verify_owner.assert_called_with(lab.DEFAULT_PROFILE, "endpoint", run_id, FLAN_NAME)
         aws.assert_called_once_with(lab.DEFAULT_PROFILE, "sagemaker", "delete-endpoint",
-                                    request={"EndpointName": lab.NAME})
+                                    request={"EndpointName": FLAN_NAME})
 
     def test_run_invokes_once_and_checks_deletion_before_removing_dependencies(self):
         for invocation_fails in (False, True):
@@ -121,7 +125,7 @@ class JumpStartEndpointTest(unittest.TestCase):
                     action, resource = operation.split("-", 1)
                     if action == "describe":
                         if resource not in resources:
-                            raise lab.AwsError(operation, f"An error occurred (ValidationException): Could not find {lab.NAME}")
+                            raise lab.AwsError(operation, f"An error occurred (ValidationException): Could not find {FLAN_NAME}")
                         return resources[resource]
                     if action == "create":
                         resources[resource] = request.copy()
@@ -139,9 +143,9 @@ class JumpStartEndpointTest(unittest.TestCase):
                       contextlib.redirect_stdout(io.StringIO())):
                     if invocation_fails:
                         with self.assertRaises(lab.AwsError):
-                            lab.run(lab.DEFAULT_PROFILE)
+                            lab.run(lab.DEFAULT_PROFILE, "flan-t5-xl")
                     else:
-                        lab.run(lab.DEFAULT_PROFILE)
+                        lab.run(lab.DEFAULT_PROFILE, "flan-t5-xl")
 
                 self.assertEqual(calls.count(("sagemaker-runtime", "invoke-endpoint")), 1)
                 deletes = [operation for _, operation in calls if operation.startswith("delete-")]
@@ -154,6 +158,37 @@ class JumpStartEndpointTest(unittest.TestCase):
         with (patch.object(lab, "describe", return_value={"EndpointStatus": "InService"}),
               patch.object(lab, "aws", return_value={"Tags": [{"Key": lab.RUN_TAG, "Value": "different"}]}) as aws):
             with self.assertRaisesRegex(RuntimeError, "Refusing to delete"):
-                lab.cleanup(lab.DEFAULT_PROFILE, "my-run")
+                lab.cleanup(lab.DEFAULT_PROFILE, "my-run", FLAN_NAME)
         self.assertEqual(aws.call_count, 1)
         self.assertEqual(aws.call_args.args[2], "list-tags")
+
+    def test_cpu_plan_and_request_use_distilbert_qa_contract(self):
+        deployment = lab.DISTILBERT_QA
+        plan = lab.deployment_requests("my-run", deployment)
+        variant, = plan["endpoint-config"]["ProductionVariants"]
+        self.assertEqual(variant["InstanceType"], "ml.m5.large")
+        self.assertEqual(variant["InitialInstanceCount"], 1)
+        self.assertEqual(variant["ModelName"], "ai-platform-lab-distilbert-qa")
+        container = plan["model"]["PrimaryContainer"]
+        self.assertTrue(plan["model"]["EnableNetworkIsolation"])
+        self.assertIn("-cpu-", container["Image"])
+        self.assertTrue(container["ModelDataSource"]["S3DataSource"]["S3Uri"].endswith(
+            "/artifacts/inference-prepack/v1.0.0/"))
+
+        def aws(profile, service, operation, *args):
+            self.assertEqual((service, operation), ("sagemaker-runtime", "invoke-endpoint"))
+            self.assertEqual(args[args.index("--endpoint-name") + 1], "ai-platform-lab-distilbert-qa")
+            self.assertEqual(args[args.index("--content-type") + 1], "application/list-text")
+            self.assertEqual(args[args.index("--accept") + 1], "application/json;verbose")
+            body_path = args[args.index("--body") + 1].removeprefix("fileb://")
+            question, context = json.loads(Path(body_path).read_text(encoding="utf-8"))
+            self.assertEqual(question, "What is the product name?")
+            self.assertIn("Product: Steel Washers", context)
+            Path(args[-1]).write_text('{"answer":"Steel Washers"}', encoding="utf-8")
+            return {"InvokedProductionVariant": "AllTraffic"}
+
+        with (patch.object(lab, "aws", side_effect=aws) as invoke,
+              contextlib.redirect_stdout(io.StringIO()) as output):
+            lab.invoke_once(lab.DEFAULT_PROFILE, lab.build_fixture(deployment), deployment)
+        invoke.assert_called_once()
+        self.assertTrue(json.loads(output.getvalue())["expectedProductMatched"])
